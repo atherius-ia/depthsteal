@@ -551,12 +551,28 @@ local function watch(o)
     if o:IsA("ScreenGui") then
         watched[o] = true
         o:GetPropertyChangedSignal("Enabled"):Connect(function()
-            if alive and logOn and o.Enabled then logLine("[nyala] " .. o.Name) end
+            if not alive or not o.Enabled then return end
+            if logOn then logLine("[nyala] " .. o.Name) end
+            if skipGuardOn or skipCatchOn then
+                local gk, ck = currentKeys()
+                if cinematicHit(o, gk, ck) then
+                    pcall(hideInst, o)
+                    logLine("[skip] " .. o.Name)
+                end
+            end
         end)
     elseif o:IsA("GuiObject") then
         watched[o] = true
         o:GetPropertyChangedSignal("Visible"):Connect(function()
-            if alive and logOn and o.Visible then logLine("[tampil] " .. shortName(o)) end
+            if not alive or not o.Visible then return end
+            if logOn then logLine("[tampil] " .. shortName(o)) end
+            if skipGuardOn or skipCatchOn then
+                local gk, ck = currentKeys()
+                if cinematicHit(o, gk, ck) then
+                    pcall(hideInst, o)
+                    logLine("[skip] " .. shortName(o))
+                end
+            end
         end)
     end
 end
@@ -578,6 +594,8 @@ table.insert(conns, pg.DescendantAdded:Connect(function(inst)
     if skipGuardOn or skipCatchOn then
         local gk, ck = currentKeys()
         if cinematicHit(inst, gk, ck) then
+            pcall(hideInst, inst)
+            logLine("[skip] " .. shortName(inst))
             task.defer(function()
                 pcall(hideInst, inst)
                 status.Text = "Skip: " .. inst.Name
@@ -595,12 +613,14 @@ task.spawn(function()
                 if g:IsA("ScreenGui") and g ~= gui then
                     if g.Enabled and cinematicHit(g, gk, ck) then
                         pcall(hideInst, g)
+                        logLine("[skip] " .. g.Name)
                         status.Text = "Skip: " .. g.Name
                     end
                     if g.Enabled then
                         for _, f in ipairs(g:GetChildren()) do
                             if f:IsA("GuiObject") and f.Visible and cinematicHit(f, gk, ck) then
                                 pcall(hideInst, f)
+                                logLine("[skip] " .. shortName(f))
                                 status.Text = "Skip: " .. f.Name
                             end
                         end
@@ -612,10 +632,12 @@ task.spawn(function()
     end
 end)
 
--- Kamera cinematic: kembalikan ke kamera normal
+-- Kamera cinematic: timpa posisi kamera di akhir tiap frame supaya tetap mengikuti karakter
 do
     local lastCam
-    table.insert(conns, RunService.RenderStepped:Connect(function()
+    local camName = "AutoStealSkipCam"
+    pcall(function() RunService:UnbindFromRenderStep(camName) end)
+    RunService:BindToRenderStep(camName, Enum.RenderPriority.Last.Value, function()
         local c = workspace.CurrentCamera
         if not c then return end
         if logOn and c.CameraType ~= lastCam then
@@ -623,14 +645,18 @@ do
             logLine("[kamera] " .. (tostring(c.CameraType):gsub("Enum.CameraType.", "")))
         end
         if (skipGuardOn or skipCatchOn) and c.CameraType == Enum.CameraType.Scriptable then
-            local ch = lp.Character
-            local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-            if hum then
-                c.CameraSubject = hum
-                c.CameraType = Enum.CameraType.Custom
+            local h = getHRP()
+            if h then
+                local pos = h.Position
+                local back = -h.CFrame.LookVector
+                c.CFrame = CFrame.lookAt(pos + back * 12 + Vector3.new(0, 6, 0), pos + Vector3.new(0, 2, 0))
+                c.FieldOfView = 70
             end
         end
-    end))
+    end)
+    table.insert(conns, { Disconnect = function()
+        pcall(function() RunService:UnbindFromRenderStep(camName) end)
+    end })
 end
 
 skipGuardBtn.Activated:Connect(function() setSkipGuard(not skipGuardOn) end)
