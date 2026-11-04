@@ -317,8 +317,25 @@ skipGuardBtn.Size = UDim2.new(1, 0, 1, 0)
 local skipCatchBtn = mkBtn(mkRow(32), "Skip Catch Cinematic: OFF", COL_GREY)
 skipCatchBtn.Size = UDim2.new(1, 0, 1, 0)
 
-local logBtn = mkBtn(mkRow(32), "Log GUI & kamera baru: OFF", COL_GREY)
+local logBtn = mkBtn(mkRow(32), "Log GUI dan kamera: OFF", COL_GREY)
 logBtn.Size = UDim2.new(1, 0, 1, 0)
+
+local logRow = mkRow(110)
+local logLabel = Instance.new("TextLabel")
+logLabel.Size = UDim2.new(1, 0, 1, 0)
+logLabel.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+logLabel.TextColor3 = Color3.fromRGB(190, 230, 190)
+logLabel.Font = Enum.Font.Code
+logLabel.TextSize = 10
+logLabel.TextWrapped = true
+logLabel.TextXAlignment = Enum.TextXAlignment.Left
+logLabel.TextYAlignment = Enum.TextYAlignment.Top
+logLabel.ClipsDescendants = true
+logLabel.Text = "(log kosong)"
+logLabel.Parent = logRow
+round(logLabel, 6)
+
+local btnCopyLog, btnClearLog = twoBtns("Salin Log", COL_BLUE, "Hapus Log", COL_GREY)
 
 local liftBtn = mkBtn(mkRow(32), "Naikkan posisi +5 Y (darurat)", COL_GREY)
 liftBtn.Size = UDim2.new(1, 0, 1, 0)
@@ -458,6 +475,16 @@ afkBtn.Activated:Connect(function() setAfk(not afkOn) end)
 -- dan kembalikan kamera ke mode normal kalau game memakainya untuk cinematic.
 local pg = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
 
+-- Log ditampilkan di kotak log dalam menu (dan juga di console)
+local logLines = {}
+local function logLine(s)
+    print(s)
+    logLines[#logLines + 1] = s
+    if #logLines > 80 then table.remove(logLines, 1) end
+    local from = math.max(1, #logLines - 7)
+    logLabel.Text = table.concat(logLines, "\n", from, #logLines)
+end
+
 local function setSkipGuard(on)
     skipGuardOn = on
     skipGuardBtn.Text = "Skip Guardian Entrance: " .. (on and "ON" or "OFF")
@@ -487,13 +514,13 @@ local function nameMatches(name, keys)
     return false
 end
 
-local function cinematicHit(inst)
-    if skipGuardOn and nameMatches(inst.Name, splitKeys(guardKeyBox.Text)) then
-        return true
-    end
-    if skipCatchOn and nameMatches(inst.Name, splitKeys(catchKeyBox.Text)) then
-        return true
-    end
+local function currentKeys()
+    return splitKeys(guardKeyBox.Text), splitKeys(catchKeyBox.Text)
+end
+
+local function cinematicHit(inst, gk, ck)
+    if skipGuardOn and nameMatches(inst.Name, gk) then return true end
+    if skipCatchOn and nameMatches(inst.Name, ck) then return true end
     return false
 end
 
@@ -505,29 +532,79 @@ local function hideInst(inst)
     end
 end
 
+local function isTopLevel(inst)
+    return inst:IsA("ScreenGui")
+        or (inst:IsA("GuiObject") and inst.Parent ~= nil and inst.Parent:IsA("ScreenGui"))
+end
+
+local function shortName(inst)
+    local n = inst.Name
+    local p = inst.Parent
+    if p and p ~= pg then n = p.Name .. "/" .. n end
+    return n .. " (" .. inst.ClassName .. ")"
+end
+
+-- Pantau ScreenGui (Enabled) dan frame tingkat atas (Visible): dicatat di log saat menyala
+local watched = setmetatable({}, { __mode = "k" })
+local function watch(o)
+    if watched[o] then return end
+    if o:IsA("ScreenGui") then
+        watched[o] = true
+        o:GetPropertyChangedSignal("Enabled"):Connect(function()
+            if alive and logOn and o.Enabled then logLine("[nyala] " .. o.Name) end
+        end)
+    elseif o:IsA("GuiObject") then
+        watched[o] = true
+        o:GetPropertyChangedSignal("Visible"):Connect(function()
+            if alive and logOn and o.Visible then logLine("[tampil] " .. shortName(o)) end
+        end)
+    end
+end
+
+for _, g in ipairs(pg:GetChildren()) do
+    if g:IsA("ScreenGui") and g ~= gui then
+        watch(g)
+        for _, f in ipairs(g:GetChildren()) do watch(f) end
+    end
+end
+
 -- GUI yang baru muncul
 table.insert(conns, pg.DescendantAdded:Connect(function(inst)
     if not (inst:IsA("ScreenGui") or inst:IsA("GuiObject")) then return end
     if inst == gui or inst:IsDescendantOf(gui) then return end
-    if logOn and inst:IsA("ScreenGui") then
-        print("[GUI baru] " .. inst:GetFullName())
-    end
-    if (skipGuardOn or skipCatchOn) and cinematicHit(inst) then
-        task.defer(function()
-            pcall(hideInst, inst)
-            status.Text = "Skip: " .. inst.Name
-        end)
+    local top = isTopLevel(inst)
+    if top then watch(inst) end
+    if logOn and top then logLine("[baru] " .. shortName(inst)) end
+    if skipGuardOn or skipCatchOn then
+        local gk, ck = currentKeys()
+        if cinematicHit(inst, gk, ck) then
+            task.defer(function()
+                pcall(hideInst, inst)
+                status.Text = "Skip: " .. inst.Name
+            end)
+        end
     end
 end))
 
--- ScreenGui yang sudah ada tapi dinyalakan game saat cinematic
+-- GUI yang sudah ada tapi dinyalakan game saat cinematic
 task.spawn(function()
     while alive do
         if skipGuardOn or skipCatchOn then
+            local gk, ck = currentKeys()
             for _, g in ipairs(pg:GetChildren()) do
-                if g:IsA("ScreenGui") and g ~= gui and g.Enabled and cinematicHit(g) then
-                    pcall(hideInst, g)
-                    status.Text = "Skip: " .. g.Name
+                if g:IsA("ScreenGui") and g ~= gui then
+                    if g.Enabled and cinematicHit(g, gk, ck) then
+                        pcall(hideInst, g)
+                        status.Text = "Skip: " .. g.Name
+                    end
+                    if g.Enabled then
+                        for _, f in ipairs(g:GetChildren()) do
+                            if f:IsA("GuiObject") and f.Visible and cinematicHit(f, gk, ck) then
+                                pcall(hideInst, f)
+                                status.Text = "Skip: " .. f.Name
+                            end
+                        end
+                    end
                 end
             end
         end
@@ -543,7 +620,7 @@ do
         if not c then return end
         if logOn and c.CameraType ~= lastCam then
             lastCam = c.CameraType
-            print("[Kamera] CameraType = " .. tostring(c.CameraType))
+            logLine("[kamera] " .. (tostring(c.CameraType):gsub("Enum.CameraType.", "")))
         end
         if (skipGuardOn or skipCatchOn) and c.CameraType == Enum.CameraType.Scriptable then
             local ch = lp.Character
@@ -561,19 +638,28 @@ skipCatchBtn.Activated:Connect(function() setSkipCatch(not skipCatchOn) end)
 
 logBtn.Activated:Connect(function()
     logOn = not logOn
-    logBtn.Text = "Log GUI & kamera baru: " .. (logOn and "ON" or "OFF")
+    logBtn.Text = "Log GUI dan kamera: " .. (logOn and "ON" or "OFF")
     logBtn.BackgroundColor3 = logOn and COL_GREEN or COL_GREY
     if logOn then
-        print("== ScreenGui yang ada sekarang ==")
-        for _, g in ipairs(pg:GetChildren()) do
-            if g:IsA("ScreenGui") and g ~= gui then
-                print(string.format("%s | Enabled=%s", g.Name, tostring(g.Enabled)))
-            end
-        end
-        status.Text = "Log aktif: lihat console"
+        logLine("== Log aktif. Picu cinematic sekarang ==")
+        status.Text = "Log aktif: lihat kotak log di menu"
     else
         status.Text = "Log dimatikan"
     end
+end)
+
+btnCopyLog.Activated:Connect(function()
+    if not setclipboard then
+        status.Text = "Executor ini tidak mendukung setclipboard"
+        return
+    end
+    local okc = pcall(setclipboard, table.concat(logLines, "\n"))
+    status.Text = okc and ("Log disalin (" .. #logLines .. " baris)") or "Gagal menyalin log"
+end)
+
+btnClearLog.Activated:Connect(function()
+    logLines = {}
+    logLabel.Text = "(log kosong)"
 end)
 
 -- ===== Auto Training =====
