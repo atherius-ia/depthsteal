@@ -38,6 +38,7 @@ local stabOn, onlyList = true, false
 local keepY, syncY, baseY = true, true, nil
 local afkOn, afkCount = true, 0
 local skipGuardOn, skipCatchOn, logOn = false, false, false
+local cineCount = 0 -- bertambah tiap GUI "tunggu setelah steal" muncul
 local startClock = os.clock()
 local frontPos
 local zones, selected, zoneCounter = {}, nil, 0
@@ -281,7 +282,9 @@ btnFront.Size = UDim2.new(1, 0, 1, 0)
 local speedBox = mkField("Speed (studs/dtk)", "60")
 local yOffsetBox = mkField("Offset Y (studs)", "0")
 local syncWaitBox = mkField("Tunggu di depan sblm steal (dtk)", "2")
-local afterStealBox = mkField("Jeda setelah steal (dtk)", "3")
+local afterStealBox = mkField("Jeda cadangan (dtk, bila GUI kosong)", "3")
+local cineKeyBox = mkField("Tunggu GUI setelah steal", "cinematic/device")
+local cineTimeoutBox = mkField("Batas tunggu GUI (dtk)", "10")
 local frontBox = mkField("Tunggu di depan (dtk)", "1.5")
 local radiusBox = mkField("Radius cari prompt", "100")
 local stealBox = mkField("Maks steal / siklus", "1")
@@ -595,6 +598,13 @@ end
 table.insert(conns, pg.DescendantAdded:Connect(function(inst)
     if not (inst:IsA("ScreenGui") or inst:IsA("GuiObject")) then return end
     if inst == gui or inst:IsDescendantOf(gui) then return end
+    -- Penanda untuk siklus: GUI "Induk/Nama" yang dicocokkan dengan kolom "Tunggu GUI setelah steal"
+    if inst:IsA("GuiObject") and inst.Parent then
+        local key = cineKeyBox.Text:lower():match("^%s*(.-)%s*$")
+        if key ~= "" and (inst.Parent.Name .. "/" .. inst.Name):lower():find(key, 1, true) then
+            cineCount += 1
+        end
+    end
     local top = isTopLevel(inst)
     if top then watch(inst) end
     if logOn and top then logLine("[baru] " .. shortName(inst)) end
@@ -1078,15 +1088,30 @@ local function cycle(id)
 
     local eggs = collectEggs(z, radius, speed, id)
     if not alivePath(id) then return end
+    local c0 = cineCount
     local stolen = doSteals(z, radius, speed, id)
     if not alivePath(id) then return end
 
-    if stolen > 0 and afterSteal > 0 then
-        status.Text = string.format("Steal: %d | jeda %.1f dtk", stolen, afterSteal)
-        if not pause(afterSteal, id) then return end
+    if stolen > 0 then
+        local cineKey = cineKeyBox.Text:match("%S")
+        if cineKey then
+            -- Tunggu GUI cinematic muncul (tanpa delay tetap). Kalau sudah muncul selama steal, langsung lanjut.
+            local timeout = clamp(tonumber(cineTimeoutBox.Text) or 10, 1, 60)
+            local t0 = os.clock()
+            if cineCount == c0 then status.Text = "Menunggu " .. cineKeyBox.Text end
+            while alivePath(id) and cineCount == c0 and os.clock() - t0 < timeout do
+                task.wait(0.05)
+            end
+            if not alivePath(id) then return end
+            status.Text = (cineCount > c0) and "GUI terdeteksi, lanjut ke depan"
+                or "Batas tunggu habis, lanjut ke depan"
+        elseif afterSteal > 0 then
+            status.Text = string.format("Steal: %d | jeda %.1f dtk", stolen, afterSteal)
+            if not pause(afterSteal, id) then return end
+        end
     else
         status.Text = string.format("Pickup: %d | Steal: %d", eggs, stolen)
-        if eggs == 0 and stolen == 0 then
+        if eggs == 0 then
             if not pause(1, id) then return end
         end
     end
@@ -1236,6 +1261,8 @@ local fieldMap = {
     yOffset = yOffsetBox,
     syncWait = syncWaitBox,
     afterSteal = afterStealBox,
+    cineKey = cineKeyBox,
+    cineTimeout = cineTimeoutBox,
     waitFront = frontBox,
     radius = radiusBox,
     maxSteal = stealBox,
