@@ -37,6 +37,7 @@ local pickupOn, trainOn = true, false
 local stabOn, onlyList = true, false
 local keepY, syncY, baseY = true, true, nil
 local afkOn, afkCount = true, 0
+local skipGuardOn, skipCatchOn, logOn = false, false, false
 local startClock = os.clock()
 local safePos, frontPos
 local zones, selected, zoneCounter = {}, nil, 0
@@ -305,6 +306,20 @@ keepYBtn.Size = UDim2.new(1, 0, 1, 0)
 local syncBtn = mkBtn(mkRow(32), "Sinkron tinggi di Depan: ON", COL_GREEN)
 syncBtn.Size = UDim2.new(1, 0, 1, 0)
 
+mkHeader("SKIP CINEMATIC (eksperimental)")
+
+local guardKeyBox = mkField("Kata kunci guardian", "guardian,entrance")
+local catchKeyBox = mkField("Kata kunci catch", "catch,cinematic")
+
+local skipGuardBtn = mkBtn(mkRow(32), "Skip Guardian Entrance: OFF", COL_GREY)
+skipGuardBtn.Size = UDim2.new(1, 0, 1, 0)
+
+local skipCatchBtn = mkBtn(mkRow(32), "Skip Catch Cinematic: OFF", COL_GREY)
+skipCatchBtn.Size = UDim2.new(1, 0, 1, 0)
+
+local logBtn = mkBtn(mkRow(32), "Log GUI & kamera baru: OFF", COL_GREY)
+logBtn.Size = UDim2.new(1, 0, 1, 0)
+
 local liftBtn = mkBtn(mkRow(32), "Naikkan posisi +5 Y (darurat)", COL_GREY)
 liftBtn.Size = UDim2.new(1, 0, 1, 0)
 
@@ -437,6 +452,129 @@ task.spawn(function()
 end)
 
 afkBtn.Activated:Connect(function() setAfk(not afkOn) end)
+
+-- ===== Skip cinematic (Guardian Entrance / Catch) =====
+-- Cara kerja: sembunyikan GUI cinematic berdasarkan kata kunci pada namanya,
+-- dan kembalikan kamera ke mode normal kalau game memakainya untuk cinematic.
+local pg = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
+
+local function setSkipGuard(on)
+    skipGuardOn = on
+    skipGuardBtn.Text = "Skip Guardian Entrance: " .. (on and "ON" or "OFF")
+    skipGuardBtn.BackgroundColor3 = on and COL_GREEN or COL_GREY
+end
+
+local function setSkipCatch(on)
+    skipCatchOn = on
+    skipCatchBtn.Text = "Skip Catch Cinematic: " .. (on and "ON" or "OFF")
+    skipCatchBtn.BackgroundColor3 = on and COL_GREEN or COL_GREY
+end
+
+local function splitKeys(s)
+    local l = {}
+    for w in string.gmatch(tostring(s):lower(), "[^,]+") do
+        w = w:match("^%s*(.-)%s*$")
+        if w ~= "" then l[#l + 1] = w end
+    end
+    return l
+end
+
+local function nameMatches(name, keys)
+    name = tostring(name):lower()
+    for _, k in ipairs(keys) do
+        if name:find(k, 1, true) then return true end
+    end
+    return false
+end
+
+local function cinematicHit(inst)
+    if skipGuardOn and nameMatches(inst.Name, splitKeys(guardKeyBox.Text)) then
+        return true
+    end
+    if skipCatchOn and nameMatches(inst.Name, splitKeys(catchKeyBox.Text)) then
+        return true
+    end
+    return false
+end
+
+local function hideInst(inst)
+    if inst:IsA("ScreenGui") then
+        inst.Enabled = false
+    elseif inst:IsA("GuiObject") then
+        inst.Visible = false
+    end
+end
+
+-- GUI yang baru muncul
+table.insert(conns, pg.DescendantAdded:Connect(function(inst)
+    if not (inst:IsA("ScreenGui") or inst:IsA("GuiObject")) then return end
+    if inst == gui or inst:IsDescendantOf(gui) then return end
+    if logOn and inst:IsA("ScreenGui") then
+        print("[GUI baru] " .. inst:GetFullName())
+    end
+    if (skipGuardOn or skipCatchOn) and cinematicHit(inst) then
+        task.defer(function()
+            pcall(hideInst, inst)
+            status.Text = "Skip: " .. inst.Name
+        end)
+    end
+end))
+
+-- ScreenGui yang sudah ada tapi dinyalakan game saat cinematic
+task.spawn(function()
+    while alive do
+        if skipGuardOn or skipCatchOn then
+            for _, g in ipairs(pg:GetChildren()) do
+                if g:IsA("ScreenGui") and g ~= gui and g.Enabled and cinematicHit(g) then
+                    pcall(hideInst, g)
+                    status.Text = "Skip: " .. g.Name
+                end
+            end
+        end
+        task.wait(0.2)
+    end
+end)
+
+-- Kamera cinematic: kembalikan ke kamera normal
+do
+    local lastCam
+    table.insert(conns, RunService.RenderStepped:Connect(function()
+        local c = workspace.CurrentCamera
+        if not c then return end
+        if logOn and c.CameraType ~= lastCam then
+            lastCam = c.CameraType
+            print("[Kamera] CameraType = " .. tostring(c.CameraType))
+        end
+        if (skipGuardOn or skipCatchOn) and c.CameraType == Enum.CameraType.Scriptable then
+            local ch = lp.Character
+            local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+            if hum then
+                c.CameraSubject = hum
+                c.CameraType = Enum.CameraType.Custom
+            end
+        end
+    end))
+end
+
+skipGuardBtn.Activated:Connect(function() setSkipGuard(not skipGuardOn) end)
+skipCatchBtn.Activated:Connect(function() setSkipCatch(not skipCatchOn) end)
+
+logBtn.Activated:Connect(function()
+    logOn = not logOn
+    logBtn.Text = "Log GUI & kamera baru: " .. (logOn and "ON" or "OFF")
+    logBtn.BackgroundColor3 = logOn and COL_GREEN or COL_GREY
+    if logOn then
+        print("== ScreenGui yang ada sekarang ==")
+        for _, g in ipairs(pg:GetChildren()) do
+            if g:IsA("ScreenGui") and g ~= gui then
+                print(string.format("%s | Enabled=%s", g.Name, tostring(g.Enabled)))
+            end
+        end
+        status.Text = "Log aktif: lihat console"
+    else
+        status.Text = "Log dimatikan"
+    end
+end)
 
 -- ===== Auto Training =====
 local boostRemote
@@ -986,6 +1124,8 @@ local fieldMap = {
     pickText = pickTextBox,
     maxPick = maxPickBox,
     hold = holdBox,
+    guardKey = guardKeyBox,
+    catchKey = catchKeyBox,
 }
 
 local function cfgPath(name) return FOLDER .. "/" .. name .. ".json" end
@@ -1013,6 +1153,8 @@ local function collectConfig()
     c.toggles.keepY = keepY
     c.toggles.syncY = syncY
     c.toggles.afk = afkOn
+    c.toggles.skipGuard = skipGuardOn
+    c.toggles.skipCatch = skipCatchOn
     if frontPos then c.front = v3t(frontPos) end
     if safePos then c.safe = v3t(safePos) end
     for _, z in ipairs(zones) do
@@ -1038,6 +1180,8 @@ local function applyConfig(c)
         if c.toggles.keepY ~= nil then setKeepY(c.toggles.keepY == true) end
         if c.toggles.syncY ~= nil then setSyncY(c.toggles.syncY == true) end
         if c.toggles.afk ~= nil then setAfk(c.toggles.afk == true) end
+        if c.toggles.skipGuard ~= nil then setSkipGuard(c.toggles.skipGuard == true) end
+        if c.toggles.skipCatch ~= nil then setSkipCatch(c.toggles.skipCatch == true) end
     end
     frontPos = t3v(c.front)
     safePos = t3v(c.safe)
