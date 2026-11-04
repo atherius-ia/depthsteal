@@ -39,7 +39,7 @@ local keepY, syncY, baseY = true, true, nil
 local afkOn, afkCount = true, 0
 local skipGuardOn, skipCatchOn, logOn = false, false, false
 local startClock = os.clock()
-local safePos, frontPos
+local frontPos
 local zones, selected, zoneCounter = {}, nil, 0
 local conns = {}
 
@@ -275,7 +275,8 @@ local zl = Instance.new("UIListLayout")
 zl.Padding = UDim.new(0, 4)
 zl.Parent = zoneBox
 
-local btnFront, btnSafe = twoBtns("Set Depan", COL_BLUE, "Set Aman", COL_BLUE)
+local btnFront = mkBtn(mkRow(32), "Set Depan", COL_BLUE)
+btnFront.Size = UDim2.new(1, 0, 1, 0)
 
 local speedBox = mkField("Speed (studs/dtk)", "60")
 local yOffsetBox = mkField("Offset Y (studs)", "0")
@@ -371,8 +372,8 @@ local function refresh()
     for i, z in ipairs(zones) do
         z.btn.BackgroundColor3 = (i == selected) and COL_BLUE or COL_GREY
     end
-    info.Text = string.format("Zona: %d | Depan: %s | Aman: %s",
-        #zones, frontPos and "OK" or "-", safePos and "OK" or "-")
+    info.Text = string.format("Zona: %d | Depan: %s",
+        #zones, frontPos and "OK" or "-")
 end
 refresh()
 
@@ -485,6 +486,12 @@ local function logLine(s)
     logLabel.Text = table.concat(logLines, "\n", from, #logLines)
 end
 
+-- Kamera hanya ditimpa selama "jendela cinematic" (beberapa detik setelah ada GUI cinematic disembunyikan)
+local cinematicUntil = 0
+local function markCinematic()
+    cinematicUntil = os.clock() + 10
+end
+
 local function setSkipGuard(on)
     skipGuardOn = on
     skipGuardBtn.Text = "Skip Guardian Entrance: " .. (on and "ON" or "OFF")
@@ -557,7 +564,7 @@ local function watch(o)
                 local gk, ck = currentKeys()
                 if cinematicHit(o, gk, ck) then
                     pcall(hideInst, o)
-                    logLine("[skip] " .. o.Name)
+                    markCinematic(); logLine("[skip] " .. o.Name)
                 end
             end
         end)
@@ -570,7 +577,7 @@ local function watch(o)
                 local gk, ck = currentKeys()
                 if cinematicHit(o, gk, ck) then
                     pcall(hideInst, o)
-                    logLine("[skip] " .. shortName(o))
+                    markCinematic(); logLine("[skip] " .. shortName(o))
                 end
             end
         end)
@@ -595,7 +602,7 @@ table.insert(conns, pg.DescendantAdded:Connect(function(inst)
         local gk, ck = currentKeys()
         if cinematicHit(inst, gk, ck) then
             pcall(hideInst, inst)
-            logLine("[skip] " .. shortName(inst))
+            markCinematic(); logLine("[skip] " .. shortName(inst))
             task.defer(function()
                 pcall(hideInst, inst)
                 status.Text = "Skip: " .. inst.Name
@@ -613,14 +620,14 @@ task.spawn(function()
                 if g:IsA("ScreenGui") and g ~= gui then
                     if g.Enabled and cinematicHit(g, gk, ck) then
                         pcall(hideInst, g)
-                        logLine("[skip] " .. g.Name)
+                        markCinematic(); logLine("[skip] " .. g.Name)
                         status.Text = "Skip: " .. g.Name
                     end
                     if g.Enabled then
                         for _, f in ipairs(g:GetChildren()) do
                             if f:IsA("GuiObject") and f.Visible and cinematicHit(f, gk, ck) then
                                 pcall(hideInst, f)
-                                logLine("[skip] " .. shortName(f))
+                                markCinematic(); logLine("[skip] " .. shortName(f))
                                 status.Text = "Skip: " .. f.Name
                             end
                         end
@@ -635,6 +642,7 @@ end)
 -- Kamera cinematic: timpa posisi kamera di akhir tiap frame supaya tetap mengikuti karakter
 do
     local lastCam
+    local seenScriptable = false
     local camName = "AutoStealSkipCam"
     pcall(function() RunService:UnbindFromRenderStep(camName) end)
     RunService:BindToRenderStep(camName, Enum.RenderPriority.Last.Value, function()
@@ -644,14 +652,21 @@ do
             lastCam = c.CameraType
             logLine("[kamera] " .. (tostring(c.CameraType):gsub("Enum.CameraType.", "")))
         end
-        if (skipGuardOn or skipCatchOn) and c.CameraType == Enum.CameraType.Scriptable then
-            local h = getHRP()
-            if h then
-                local pos = h.Position
-                local back = -h.CFrame.LookVector
-                c.CFrame = CFrame.lookAt(pos + back * 12 + Vector3.new(0, 6, 0), pos + Vector3.new(0, 2, 0))
-                c.FieldOfView = 70
+        if c.CameraType == Enum.CameraType.Scriptable then
+            if (skipGuardOn or skipCatchOn) and os.clock() < cinematicUntil then
+                local h = getHRP()
+                if h then
+                    local pos = h.Position
+                    local back = -h.CFrame.LookVector
+                    c.CFrame = CFrame.lookAt(pos + back * 12 + Vector3.new(0, 6, 0), pos + Vector3.new(0, 2, 0))
+                    c.FieldOfView = 70
+                    seenScriptable = true
+                end
             end
+        elseif seenScriptable then
+            -- cinematic selesai (kamera kembali normal): hentikan penimpaan
+            seenScriptable = false
+            cinematicUntil = 0
         end
     end)
     table.insert(conns, { Disconnect = function()
@@ -1054,7 +1069,7 @@ local function cycle(id)
     local z = zones[selected]
     if not z then return end
 
-    -- 1) Dari zona aman ke Depan dulu, tunggu tinggi kapal sesuai, baru ke zona steal
+    -- 1) Ke Depan dulu, tunggu tinggi kapal sesuai, baru ke zona steal
     if not syncHeight(speed, id) then return end
 
     status.Text = "Menuju " .. z.name
@@ -1076,17 +1091,15 @@ local function cycle(id)
         end
     end
 
-    status.Text = "Kembali ke depan zona aman"
+    -- Setelah steal, game sendiri memindahkan ke zona aman: cukup kembali ke Depan.
+    -- Ketinggian disamakan dengan posisi sekarang supaya tidak melayang ke Y lama.
+    local hh = getHRP()
+    if hh then baseY = hh.Position.Y end
+    status.Text = "Kembali ke depan"
     if not moveTo(frontPos, speed, 1.5, id) then return end
 
     status.Text = "Tunggu " .. waitFront .. " dtk"
-    if not pause(waitFront, id) then return end
-
-    status.Text = "Masuk zona aman"
-    if not moveTo(safePos, speed, 1.5, id) then return end
-
-    status.Text = "Jeda sebelum siklus berikut"
-    pause(2, id)
+    pause(waitFront, id)
 end
 
 -- ===== Zona =====
@@ -1142,11 +1155,6 @@ btnFront.Activated:Connect(function()
     if hrp then frontPos = hrp.Position refresh() end
 end)
 
-btnSafe.Activated:Connect(function()
-    local hrp = getHRP()
-    if hrp then safePos = hrp.Position refresh() end
-end)
-
 pickBtn.Activated:Connect(function() setPickup(not pickupOn) end)
 onlyBtn.Activated:Connect(function() setOnly(not onlyList) end)
 stabBtn.Activated:Connect(function() setStab(not stabOn) end)
@@ -1198,8 +1206,8 @@ scanBtn.Activated:Connect(function()
 end)
 
 local function setRunning(on)
-    if on and not (zones[selected] and frontPos and safePos) then
-        status.Text = "Lengkapi dulu: pilih zona, Set Depan, Set Aman"
+    if on and not (zones[selected] and frontPos) then
+        status.Text = "Lengkapi dulu: pilih zona dan Set Depan"
         return
     end
     if on then
@@ -1268,7 +1276,6 @@ local function collectConfig()
     c.toggles.skipGuard = skipGuardOn
     c.toggles.skipCatch = skipCatchOn
     if frontPos then c.front = v3t(frontPos) end
-    if safePos then c.safe = v3t(safePos) end
     for _, z in ipairs(zones) do
         local t = v3t(z.pos)
         t.name = z.name
@@ -1296,7 +1303,6 @@ local function applyConfig(c)
         if c.toggles.skipCatch ~= nil then setSkipCatch(c.toggles.skipCatch == true) end
     end
     frontPos = t3v(c.front)
-    safePos = t3v(c.safe)
     clearZones()
     if type(c.zones) == "table" then
         for i, zd in ipairs(c.zones) do
