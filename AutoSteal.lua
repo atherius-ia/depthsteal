@@ -130,7 +130,6 @@ end
 local minBtn = barButton("-", -62, Color3.fromRGB(90, 90, 110))
 local closeBtn = barButton("X", -32, Color3.fromRGB(190, 60, 60))
 
--- Isi jendela (disembunyikan saat minimize): bar tab, halaman, dan footer status
 local content = Instance.new("Frame")
 content.Size = UDim2.new(1, 0, 1, -32)
 content.Position = UDim2.new(0, 0, 0, 32)
@@ -196,7 +195,7 @@ status.TextYAlignment = Enum.TextYAlignment.Top
 status.Text = "Siap"
 status.Parent = footer
 
-local cur -- halaman (tab) yang sedang diisi
+local cur
 local order = 0
 local function nxt() order += 1 return order end
 
@@ -270,7 +269,6 @@ local function mkField(label, default)
     return t
 end
 
--- Label teks biasa satu baris (untuk status per menu)
 local function mkInfoLabel(h, text, color)
     local r = mkRow(h)
     local l = Instance.new("TextLabel")
@@ -287,7 +285,6 @@ local function mkInfoLabel(h, text, color)
     return l
 end
 
--- Sistem tab: tiap fitur punya halaman sendiri
 local pages, tabBtns, firstTab = {}, {}, nil
 local function selectTab(name)
     for n, p in pairs(pages) do
@@ -572,7 +569,7 @@ do
     end))
 end
 
--- ===== Setter toggle (dipakai tombol dan load config) =====
+-- ===== Setter toggle =====
 local function setPickup(on)
     pickupOn = on
     pickBtn.Text = "Pickup Egg: " .. (on and "ON" or "OFF")
@@ -618,7 +615,6 @@ end
 do
     local VIM = game:GetService("VirtualInputManager")
 
-    -- 1. Matikan event Idled Roblox secara langsung jika executor mendukung getconnections
     local function disableIdledConnections()
         if getconnections then
             for _, conn in ipairs(getconnections(lp.Idled)) do
@@ -632,13 +628,11 @@ do
     end
     pcall(disableIdledConnections)
 
-    -- 2. Fungsi pemicu sentuhan virtual via VirtualInputManager
     local function sendVirtualTap()
         if not afkOn then return end
         pcall(function()
             local cam = workspace.CurrentCamera
             local viewport = cam and cam.ViewportSize or Vector2.new(800, 600)
-            -- Ketuk area aman di pinggir layar (kanan atas)
             local x = viewport.X - 50
             local y = 50
 
@@ -649,17 +643,15 @@ do
         end)
     end
 
-    -- 3. Respons saat Roblox memicu event Idled
     table.insert(conns, lp.Idled:Connect(function()
         if afkOn then
             sendVirtualTap()
         end
     end))
 
-    -- 4. Loop interval otomatis tiap 5 menit untuk memastikan timer AFK selalu ter-reset
     task.spawn(function()
         while alive do
-            task.wait(300) -- Kirim tap setiap 5 menit
+            task.wait(300) -- Kirim tap tiap 5 menit
             if afkOn then
                 sendVirtualTap()
                 if logOn then
@@ -669,6 +661,17 @@ do
         end
     end)
 end
+
+task.spawn(function()
+    while alive do
+        local s = math.floor(os.clock() - startClock)
+        afkStatus.Text = string.format("Aktif %d:%02d:%02d | Dicegah: %d",
+            math.floor(s / 3600), math.floor((s % 3600) / 60), s % 60, afkCount)
+        task.wait(1)
+    end
+end)
+
+afkBtn.Activated:Connect(function() setAfk(not afkOn) end)
 
 -- ===== Skip cinematic (Guardian Entrance / Catch) =====
 local pg = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
@@ -2055,7 +2058,7 @@ do
         logLine("== selesai (" .. n .. " item): tekan Salin Log ==")
     end)
 
-    -- ===== Auto Drop telur ukuran kecil =====
+    -- ===== Auto Drop telur ukuran kecil (Fixed Camera & Clean Code) =====
     ;(function()
         local dropOn, dropBusy = false, false
         local multCache
@@ -2133,34 +2136,6 @@ do
             return nil
         end
 
-        local function emptySpot()
-            local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(800, 400)
-            local inset = GuiService:GetGuiInset()
-            for _, fy in ipairs({ 0.45, 0.6, 0.3, 0.7 }) do
-                for _, fx in ipairs({ 0.5, 0.35, 0.65, 0.2, 0.8 }) do
-                    local x, y = vp.X * fx, vp.Y * fy
-                    local okq, objs = pcall(function()
-                        return pg:GetGuiObjectsAtPosition(x - inset.X, y - inset.Y)
-                    end)
-                    if okq and #objs == 0 then return x, y end
-                end
-            end
-            return vp.X * 0.5, vp.Y * 0.5
-        end
-
-        local function resetHover()
-            if not VIM then return end
-            local x, y = emptySpot()
-            pcall(function()
-                VIM:SendMouseMoveEvent(x, y, game)
-                task.wait(0.03)
-                VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
-                task.wait(0.03)
-                VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
-                VIM:SendMouseMoveEvent(x, y, game)
-            end)
-        end
-
         local function pressHotkey(lbl)
             if not (VIM and lbl) then return false end
             local k = tostring(lbl.Text):match("%[(%w)%]")
@@ -2177,33 +2152,27 @@ do
         local function doDrop()
             local clicks, t0 = 0, os.clock()
             local lastFound = t0
-            while alive and dropOn and os.clock() - t0 < 25 and clicks < 12 do
+
+            while alive and dropOn and os.clock() - t0 < 15 and clicks < 10 do
                 local b, lbl = findDropBtn(bs.dropTextBox.Text)
                 if not b then b, lbl = findDropBtn(bs.dropSureBox.Text) end
+
                 if b then
                     lastFound = os.clock()
-                    resetHover()
-                    task.wait(0.35)
-                    local b2, lbl2 = findDropBtn(bs.dropTextBox.Text)
-                    if not b2 then b2, lbl2 = findDropBtn(bs.dropSureBox.Text) end
-                    if b2 then b, lbl = b2, lbl2 end
                     clicks += 1
                     dsay("tekan tombol (" .. clicks .. ")")
+
                     clickGui(b)
-                    if clicks >= 3 and clicks % 2 == 1 then
-                        task.wait(0.3)
-                        if findDropBtn(bs.dropTextBox.Text) or findDropBtn(bs.dropSureBox.Text) then
-                            pressHotkey(lbl)
-                        end
-                    end
-                    task.wait(0.4)
+
+                    if lbl then pressHotkey(lbl) end
+
+                    task.wait(0.35)
                 else
-                    if clicks > 0 and os.clock() - lastFound > 1.2 then break end
-                    if clicks == 0 and os.clock() - t0 > 8 then break end
+                    if clicks > 0 and os.clock() - lastFound > 0.8 then break end
+                    if clicks == 0 and os.clock() - t0 > 5 then break end
                     task.wait(0.15)
                 end
             end
-            if clicks > 0 then resetHover() end
             return clicks
         end
 
@@ -2901,7 +2870,7 @@ do
     if hasFS then
         pcall(function()
             if isfile(NOTIF_FILE) then
-                local d = HttpService:JSONDecode(readfile(NOTIF_FILE))
+                local d = HttpService:JSONEncode(readfile(NOTIF_FILE))
                 if type(d) == "table" then
                     if type(d.url) == "string" and validUrl(d.url) then
                         stored = d.url
