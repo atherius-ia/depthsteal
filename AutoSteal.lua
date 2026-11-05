@@ -416,7 +416,7 @@ local speedBox = mkField("Speed (studs/dtk)", "60")
 local yOffsetBox = mkField("Offset Y (studs)", "0")
 local syncWaitBox = mkField("Tunggu di depan sblm steal (dtk)", "2")
 local afterStealBox = mkField("Jeda cadangan (dtk, bila GUI kosong)", "3")
-local cineKeyBox = mkField("Tunggu GUI setelah steal", "cinematic/device")
+local cineKeyBox = mkField("Tunggu GUI setelah steal", "hatchreveal/device")
 local cineTimeoutBox = mkField("Batas tunggu GUI (dtk)", "10")
 local frontBox = mkField("Tunggu di depan (dtk)", "1.5")
 local radiusBox = mkField("Radius cari prompt", "100")
@@ -455,6 +455,20 @@ skipGuardBtn.Size = UDim2.new(1, 0, 1, 0)
 
 local skipCatchBtn = mkBtn(mkRow(32), "Skip Catch Cinematic: OFF", COL_GREY)
 skipCatchBtn.Size = UDim2.new(1, 0, 1, 0)
+
+-- ===== Tab DROP =====
+newTab("Drop")
+mkHeader("AUTO DROP TELUR UKURAN KECIL")
+
+bs.dropBtn = mkBtn(mkRow(38), "Auto Drop Small: OFF", COL_GREY)
+bs.dropBtn.Size = UDim2.new(1, 0, 1, 0)
+bs.dropBtn.TextSize = 14
+
+bs.dropStatus = mkInfoLabel(30, "Drop: mati")
+
+bs.dropSizeBox = mkField("Ukuran yang di-drop", "small")
+bs.dropTextBox = mkField("Teks tombol DROP", "drop")
+bs.dropSureBox = mkField("Teks tombol konfirmasi", "sure")
 
 -- ===== Tab LOG =====
 newTab("Log")
@@ -2037,6 +2051,145 @@ do
         end
         logLine("== selesai (" .. n .. " item): tekan Salin Log ==")
     end)
+
+    -- ===== Auto Drop telur ukuran kecil =====
+    -- Setelah steal ada animasi ukuran (SMALL, BIG, HUGE, dst). Ukuran akhir = label terakhir yang
+    -- terbaca sebelum animasi hilang. Kalau ukuran akhir ada di daftar "Ukuran yang di-drop",
+    -- tombol DROP lalu SURE? ditekan berulang sampai tombolnya hilang.
+    -- Label ukuran dicari lewat posisi: label huruf saja tepat di bawah label pengali (mis. "x1.38").
+    do
+        local dropOn, dropBusy = false, false
+        local multCache
+
+        local function dsay(t)
+            bs.dropStatus.Text = "Drop: " .. t
+            status.Text = "Drop: " .. t
+        end
+
+        local function isMult(o)
+            local t = tostring(o.Text):gsub("[\128-\255]", "")
+            return t:match("^%s*[xX]?%s*%d+%.%d+%s*$") ~= nil
+        end
+
+        local function findMult()
+            if multCache and multCache.Parent and isMult(multCache) and visibleDeep(multCache) then
+                return multCache
+            end
+            multCache = nil
+            for _, o in ipairs(pg:GetDescendants()) do
+                if o:IsA("TextLabel") and o.Text ~= "" and not o:IsDescendantOf(gui)
+                    and o.AbsoluteSize.X > 1 and isMult(o) and visibleDeep(o) then
+                    multCache = o
+                    return o
+                end
+            end
+            return nil
+        end
+
+        local function readTier(m)
+            local sg = m:FindFirstAncestorWhichIsA("ScreenGui")
+            if not sg then return nil end
+            local mp, ms = m.AbsolutePosition, m.AbsoluteSize
+            local mx = mp.X + ms.X / 2
+            local best, bd
+            for _, o in ipairs(sg:GetDescendants()) do
+                if o ~= m and o:IsA("TextLabel") and o.AbsoluteSize.X > 1 then
+                    local t = tostring(o.Text):gsub("[\128-\255]", "")
+                    t = t:match("^%s*(%a+)%s*$")
+                    if t and t:lower() ~= "luck" and visibleDeep(o) then
+                        local p, sz = o.AbsolutePosition, o.AbsoluteSize
+                        local dy = p.Y - mp.Y
+                        local dx = math.abs(p.X + sz.X / 2 - mx)
+                        if dy >= -5 and dy <= 150 and dx <= 160 then
+                            local d = dy + dx
+                            if not bd or d < bd then best, bd = t, d end
+                        end
+                    end
+                end
+            end
+            return best
+        end
+
+        local function isDropSize(t)
+            local n = norm(t)
+            for _, k in ipairs(splitKeys(bs.dropSizeBox.Text)) do
+                if n == norm(k) then return true end
+            end
+            return false
+        end
+
+        -- Tekan DROP / SURE? sampai tidak ada lagi tombol dengan teks itu
+        local function doDrop()
+            local clicks, t0 = 0, os.clock()
+            local lastFound = t0
+            while alive and dropOn and os.clock() - t0 < 25 and clicks < 12 do
+                local b = findByText(bs.dropTextBox.Text, nil, true)
+                    or findByText(bs.dropSureBox.Text, nil, true)
+                if b then
+                    lastFound = os.clock()
+                    clicks += 1
+                    dsay("tekan tombol (" .. clicks .. ")")
+                    clickGui(b)
+                    task.wait(0.5)
+                else
+                    if clicks > 0 and os.clock() - lastFound > 1.2 then break end
+                    if clicks == 0 and os.clock() - t0 > 8 then break end
+                    task.wait(0.15)
+                end
+            end
+            return clicks
+        end
+
+        task.spawn(function()
+            local lastTier, pendingSince, goneSince
+            while alive do
+                local active = dropOn and not dropBusy
+                if active then
+                    local now = os.clock()
+                    local m = findMult()
+                    local tier = m and readTier(m) or nil
+                    if tier then
+                        if tier ~= lastTier and logOn then logLine("[ukuran] " .. tier) end
+                        lastTier = tier
+                        pendingSince = pendingSince or now
+                        goneSince = nil
+                    elseif pendingSince then
+                        goneSince = goneSince or now
+                        if now - goneSince >= 0.8 or now - pendingSince > 30 then
+                            local final = lastTier
+                            lastTier, pendingSince, goneSince = nil, nil, nil
+                            if final and isDropSize(final) then
+                                dropBusy = true
+                                dsay("ukuran " .. final:upper() .. ", di-drop")
+                                local okd, n = pcall(doDrop)
+                                dropBusy = false
+                                if okd and n > 0 then
+                                    dsay("selesai (" .. n .. " tekan)")
+                                else
+                                    dsay("tombol DROP tidak ditemukan (cek teks tombol)")
+                                end
+                            elseif final then
+                                dsay("ukuran " .. final:upper() .. ", dipertahankan")
+                            end
+                        end
+                    end
+                    task.wait(pendingSince and 0.1 or 0.35)
+                else
+                    lastTier, pendingSince, goneSince = nil, nil, nil
+                    task.wait(0.3)
+                end
+            end
+        end)
+
+        bs.dropSet = function(on)
+            dropOn = on
+            bs.dropOn = on
+            bs.dropBtn.Text = "Auto Drop Small: " .. (on and "ON" or "OFF")
+            bs.dropBtn.BackgroundColor3 = on and COL_GREEN or COL_GREY
+            bs.dropStatus.Text = on and "Drop: menunggu animasi ukuran" or "Drop: mati"
+        end
+        bs.dropBtn.Activated:Connect(function() bs.dropSet(not dropOn) end)
+    end
 end
 
 -- ===== Satu siklus =====
@@ -2256,6 +2409,9 @@ local fieldMap = {
     bossTp = bs.tpBox,
     bossHome = bs.homeNameBox,
     bossClickY = bs.clickYBox,
+    dropSizes = bs.dropSizeBox,
+    dropText = bs.dropTextBox,
+    dropSure = bs.dropSureBox,
 }
 
 local function cfgPath(name) return FOLDER .. "/" .. name .. ".json" end
@@ -2287,6 +2443,7 @@ local function collectConfig()
     c.toggles.skipCatch = skipCatchOn
     c.toggles.train = trainOn
     c.toggles.boss = bs.on
+    c.toggles.drop = bs.dropOn == true
     c.clickMode = bs.mode
     if frontPos then c.front = v3t(frontPos) end
     if tr.pos then c.trainPos = v3t(tr.pos) end
@@ -2319,6 +2476,7 @@ local function applyConfig(c)
         if c.toggles.skipCatch ~= nil then setSkipCatch(c.toggles.skipCatch == true) end
         if c.toggles.train ~= nil then setTrain(c.toggles.train == true) end
         if c.toggles.boss ~= nil then setBoss(c.toggles.boss == true) end
+        if c.toggles.drop ~= nil and bs.dropSet then bs.dropSet(c.toggles.drop == true) end
     end
     if type(c.clickMode) == "number" then setClickMode(c.clickMode) end
     frontPos = t3v(c.front)
