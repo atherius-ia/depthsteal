@@ -380,6 +380,9 @@ bs.btn.TextSize = 14
 
 bs.status = mkInfoLabel(30, "Boss: mati")
 
+bs.tpBaseBtn = mkBtn(mkRow(34), "Teleport ke Base (respawn)", COL_BLUE)
+bs.tpBaseBtn.Size = UDim2.new(1, 0, 1, 0)
+
 bs.setZone = mkBtn(mkRow(32), "Set Zona Boss (posisi saya)", COL_BLUE)
 bs.setZone.Size = UDim2.new(1, 0, 1, 0)
 
@@ -401,6 +404,10 @@ bs.modeBtn.Size = UDim2.new(1, 0, 1, 0)
 bs.testGo, bs.testHome = twoBtns("Tes GO", COL_GREY, "Tes Rumah", COL_GREY)
 bs.testFire = mkBtn(mkRow(32), "Tes FIRE", COL_GREY)
 bs.testFire.Size = UDim2.new(1, 0, 1, 0)
+
+bs.bossRespawnBtn = mkBtn(mkRow(32), "Respawn ke base bila tombol rumah gagal: ON", COL_GREEN)
+bs.bossRespawnBtn.Size = UDim2.new(1, 0, 1, 0)
+bs.bossRespawnOn = true
 
 -- ===== Tab STEAL =====
 newTab("Steal")
@@ -486,6 +493,8 @@ bs.dropSureBox = mkField("Teks tombol konfirmasi", "sure")
 mkHeader("INVENTORI PENUH")
 bs.invBtn = mkBtn(mkRow(32), "Respawn bila inventori penuh: ON", COL_GREEN)
 bs.invBtn.Size = UDim2.new(1, 0, 1, 0)
+bs.tpBaseBtn2 = mkBtn(mkRow(34), "Teleport ke Base (respawn)", COL_BLUE)
+bs.tpBaseBtn2.Size = UDim2.new(1, 0, 1, 0)
 bs.invTextBox = mkField("Teks notifikasi penuh", "inventory full")
 bs.respawnTextBox = mkField("Teks tombol respawn (opsional)", "respawn")
 
@@ -1957,10 +1966,15 @@ do
                     task.wait(1)
                 end
             end
+            if not went and bs.bossRespawnOn and bs.tpBase and alive and bs.on then
+                say("tombol rumah tidak ada, respawn ke base")
+                if logOn then logLine("[boss] tombol rumah gagal, respawn ke base") end
+                went = bs.tpBase()
+            end
             if went then
                 say("selesai, kembali ke training")
             else
-                say("tombol rumah gagal (cek Tes Rumah)")
+                say("gagal kembali ke base (cek Tes Rumah)")
             end
             task.wait(1)
         end)
@@ -2144,17 +2158,14 @@ do
             return nil
         end
 
+        -- Hotkey diganti TAP SENTUHAN pada tombolnya (bukan SendKeyEvent),
+        -- supaya Roblox tidak pindah ke mode input PC
         local function pressHotkey(lbl)
-            if not (VIM and lbl) then return false end
-            local k = tostring(lbl.Text):match("%[(%w)%]")
-            if not k then return false end
-            local okk, kc = pcall(function() return Enum.KeyCode[k:upper()] end)
-            if not (okk and kc) then return false end
-            return pcall(function()
-                VIM:SendKeyEvent(true, kc, false, game)
-                task.wait(0.05)
-                VIM:SendKeyEvent(false, kc, false, game)
-            end)
+            if not (VIM and lbl and lbl.Parent) then return false end
+            local btn = (lbl:IsA("GuiButton") and lbl) or lbl:FindFirstAncestorWhichIsA("GuiButton") or lbl
+            local okp, x, y = pcall(guiCenter, btn)
+            if not okp then return false end
+            return tapScreen(x, y)
         end
 
         -- Auto Tap layar kosong (reset UI mode penutup animasi)
@@ -2184,7 +2195,8 @@ do
 
                     clickGui(b)
 
-                    -- pressHotkey dimatikan: input keyboard membuat game pindah ke mode PC
+                    -- pressHotkey kini tap sentuhan (aman, tidak memicu mode PC)
+                    pressHotkey(lbl)
 
                     task.wait(0.35)
                 else
@@ -2274,6 +2286,25 @@ do
             end
         end
 
+        -- Teleport ke base = respawn karakter (spawn game = base). Dipakai oleh
+        -- inventori penuh, fallback Auto Boss, dan tombol manual.
+        local tpBusy = false
+        bs.tpBase = function()
+            if tpBusy then return false end
+            tpBusy = true
+            local ch = lp.Character
+            pcall(respawnNow)
+            local t0 = os.clock()
+            while alive and lp.Character == ch and os.clock() - t0 < 10 do task.wait(0.2) end
+            local moved = lp.Character ~= ch
+            if moved then
+                local t1 = os.clock()
+                while alive and not getHRP() and os.clock() - t1 < 6 do task.wait(0.2) end
+            end
+            tpBusy = false
+            return moved
+        end
+
         task.spawn(function()
             while alive do
                 if invOn and running and os.clock() - lastTrig > 20 then
@@ -2283,7 +2314,7 @@ do
                         if bs.stopSteal then bs.stopSteal() end
                         status.Text = "Inventori penuh: Auto Steal off, respawn"
                         if logOn then logLine("[inventori] penuh, respawn") end
-                        respawnNow()
+                        bs.tpBase()
                     end
                 end
                 task.wait(0.4)
@@ -2298,6 +2329,25 @@ do
         end
         bs.invSet(true)
         bs.invBtn.Activated:Connect(function() bs.invSet(not invOn) end)
+
+        local function manualTp()
+            if bs.stopSteal then bs.stopSteal() end
+            status.Text = "Teleport ke base (respawn)..."
+            if logOn then logLine("[base] teleport manual (respawn)") end
+            task.spawn(function()
+                local ok = bs.tpBase()
+                status.Text = ok and "Sudah respawn di base" or "Respawn gagal / sedang berjalan"
+            end)
+        end
+        bs.tpBaseBtn.Activated:Connect(manualTp)
+        bs.tpBaseBtn2.Activated:Connect(manualTp)
+
+        bs.bossRespawnSet = function(on)
+            bs.bossRespawnOn = on
+            bs.bossRespawnBtn.Text = "Respawn ke base bila tombol rumah gagal: " .. (on and "ON" or "OFF")
+            bs.bossRespawnBtn.BackgroundColor3 = on and COL_GREEN or COL_GREY
+        end
+        bs.bossRespawnBtn.Activated:Connect(function() bs.bossRespawnSet(not bs.bossRespawnOn) end)
     end)()
 end
 
@@ -2551,6 +2601,7 @@ local function collectConfig()
     c.toggles.boss = bs.on
     c.toggles.drop = bs.dropOn == true
     c.toggles.inv = bs.invOn == true
+    c.toggles.bossRespawn = bs.bossRespawnOn == true
     c.clickMode = bs.mode
     if frontPos then c.front = v3t(frontPos) end
     if tr.pos then c.trainPos = v3t(tr.pos) end
@@ -2585,6 +2636,7 @@ local function applyConfig(c)
         if c.toggles.boss ~= nil then setBoss(c.toggles.boss == true) end
         if c.toggles.drop ~= nil and bs.dropSet then bs.dropSet(c.toggles.drop == true) end
         if c.toggles.inv ~= nil and bs.invSet then bs.invSet(c.toggles.inv == true) end
+        if c.toggles.bossRespawn ~= nil and bs.bossRespawnSet then bs.bossRespawnSet(c.toggles.bossRespawn == true) end
     end
     if type(c.clickMode) == "number" then setClickMode(c.clickMode) end
     frontPos = t3v(c.front)
