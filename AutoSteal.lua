@@ -614,33 +614,61 @@ local function setAfk(on)
     afkBtn.BackgroundColor3 = on and COL_GREEN or COL_GREY
 end
 
--- ===== Anti-AFK =====
+-- ===== Anti-AFK (Updated & Fixed for Mobile) =====
 do
-    local VU
-    pcall(function() VU = game:GetService("VirtualUser") end)
-    table.insert(conns, lp.Idled:Connect(function()
-        if not afkOn or not VU then return end
-        local okv = pcall(function()
-            VU:CaptureController()
-            VU:ClickButton2(Vector2.new())
+    local VIM = game:GetService("VirtualInputManager")
+
+    -- 1. Matikan event Idled Roblox secara langsung jika executor mendukung getconnections
+    local function disableIdledConnections()
+        if getconnections then
+            for _, conn in ipairs(getconnections(lp.Idled)) do
+                if conn.Disable then
+                    conn:Disable()
+                elseif conn.Disconnect then
+                    conn:Disconnect()
+                end
+            end
+        end
+    end
+    pcall(disableIdledConnections)
+
+    -- 2. Fungsi pemicu sentuhan virtual via VirtualInputManager
+    local function sendVirtualTap()
+        if not afkOn then return end
+        pcall(function()
+            local cam = workspace.CurrentCamera
+            local viewport = cam and cam.ViewportSize or Vector2.new(800, 600)
+            -- Ketuk area aman di pinggir layar (kanan atas)
+            local x = viewport.X - 50
+            local y = 50
+
+            VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
+            task.wait(0.05)
+            VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+            afkCount += 1
         end)
-        if okv then afkCount += 1 end
+    end
+
+    -- 3. Respons saat Roblox memicu event Idled
+    table.insert(conns, lp.Idled:Connect(function()
+        if afkOn then
+            sendVirtualTap()
+        end
     end))
-    if not VU then
-        afkStatus.Text = "VirtualUser tidak tersedia"
-    end
+
+    -- 4. Loop interval otomatis tiap 5 menit untuk memastikan timer AFK selalu ter-reset
+    task.spawn(function()
+        while alive do
+            task.wait(300) -- Kirim tap setiap 5 menit
+            if afkOn then
+                sendVirtualTap()
+                if logOn then
+                    logLine("[Anti-AFK] Sentuhan virtual dikirim untuk reset timer AFK")
+                end
+            end
+        end
+    end)
 end
-
-task.spawn(function()
-    while alive do
-        local s = math.floor(os.clock() - startClock)
-        afkStatus.Text = string.format("Aktif %d:%02d:%02d | Dicegah: %d",
-            math.floor(s / 3600), math.floor((s % 3600) / 60), s % 60, afkCount)
-        task.wait(1)
-    end
-end)
-
-afkBtn.Activated:Connect(function() setAfk(not afkOn) end)
 
 -- ===== Skip cinematic (Guardian Entrance / Catch) =====
 local pg = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
