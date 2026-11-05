@@ -39,6 +39,7 @@ local keepY, syncY, baseY = true, true, nil
 local afkOn, afkCount = true, 0
 local skipGuardOn, skipCatchOn, logOn = false, false, false
 local cineCount = 0 -- bertambah tiap GUI "tunggu setelah steal" muncul
+local nf = { on = false } -- elemen & status notifikasi Discord
 local startClock = os.clock()
 local frontPos
 local zones, selected, zoneCounter = {}, nil, 0
@@ -260,6 +261,16 @@ mkHeader("CONFIG")
 local cfgNameBox = mkField("Nama config", "default")
 local btnSave, btnLoad = twoBtns("Save Config", COL_BLUE, "Load Config", COL_BLUE)
 local btnList, btnAuto = twoBtns("Daftar Config", COL_GREY, "Auto-load: OFF", COL_GREY)
+
+-- ===== Menu NOTIF DISCORD =====
+mkHeader("NOTIF DISCORD (disconnect/kick)")
+
+nf.url = mkField("URL webhook", "")
+nf.ping = mkField("ID Discord (ping, opsional)", "")
+nf.btn = mkBtn(mkRow(32), "Notif Discord: OFF", COL_GREY)
+nf.btn.Size = UDim2.new(1, 0, 1, 0)
+nf.test = mkBtn(mkRow(32), "Simpan & Tes Webhook", COL_BLUE)
+nf.test.Size = UDim2.new(1, 0, 1, 0)
 
 -- ===== Menu AUTO STEAL =====
 mkHeader("AUTO STEAL + PICKUP EGG")
@@ -1469,6 +1480,197 @@ btnAuto.Activated:Connect(function()
         and ("Auto-load aktif, config: " .. meta.last)
         or "Auto-load dimatikan"
 end)
+
+-- ===== Notifikasi Discord (disconnect / kick) =====
+-- URL webhook disimpan hanya di file lokal executor (AutoStealConfig/_notif.json),
+-- bukan di dalam script, supaya tidak ikut bocor kalau script dibagikan.
+do
+    local GuiService = game:GetService("GuiService")
+    local NOTIF_FILE = FOLDER .. "/_notif.json"
+    local MASK = "(tersimpan - ketik untuk ganti)"
+    local stored = ""
+    local lastSent = -math.huge
+
+    local CODES = {
+        [267] = "dikeluarkan (kick) oleh game/developer",
+        [268] = "dikeluarkan karena perilaku client dianggap tidak wajar",
+        [273] = "akun yang sama masuk dari perangkat lain",
+        [277] = "koneksi ke server terputus",
+        [278] = "dikeluarkan karena tidak ada aktivitas (idle)",
+        [279] = "gagal terhubung ke game",
+    }
+
+    local function nz(v)
+        v = tostring(v or "")
+        return v == "" and "-" or v
+    end
+
+    local function validUrl(u)
+        u = tostring(u or ""):match("^%s*(.-)%s*$")
+        for _, h in ipairs({ "discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com" }) do
+            local prefix = "https://" .. h .. "/api/webhooks/"
+            if u:sub(1, #prefix) == prefix and u:sub(#prefix + 1):match("^%d+/[%w_%-]+$") then
+                return true
+            end
+        end
+        return false
+    end
+
+    local function currentUrl()
+        local t = tostring(nf.url.Text or ""):match("^%s*(.-)%s*$")
+        if t:sub(1, 8) == "https://" then return t end
+        return stored
+    end
+
+    local function setNotif(on)
+        nf.on = on
+        nf.btn.Text = "Notif Discord: " .. (on and "ON" or "OFF")
+        nf.btn.BackgroundColor3 = on and COL_GREEN or COL_GREY
+    end
+
+    local function saveNotif()
+        if not hasFS then return false end
+        return pcall(function()
+            if not isfolder(FOLDER) then makefolder(FOLDER) end
+            writefile(NOTIF_FILE, HttpService:JSONEncode({
+                url = stored, ping = nf.ping.Text, on = nf.on,
+            }))
+        end)
+    end
+
+    local function post(url, payload)
+        local req = (syn and syn.request) or request or http_request or (fluxus and fluxus.request)
+        if not req then return false, "executor tidak mendukung request" end
+        local okr, res = pcall(req, {
+            Url = url,
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = HttpService:JSONEncode(payload),
+        })
+        if not okr then return false, tostring(res) end
+        local code = type(res) == "table" and (res.StatusCode or res.status_code) or nil
+        if code and code >= 200 and code < 300 then return true end
+        return false, "HTTP " .. tostring(code)
+    end
+
+    local function notify(title, desc, color)
+        local url = currentUrl()
+        if not validUrl(url) then return false, "URL webhook belum valid" end
+        local ping = tostring(nf.ping.Text or ""):match("^%s*(%d+)%s*$")
+        return post(url, {
+            username = "AutoSteal",
+            content = ping and ("<@" .. ping .. ">") or nil,
+            embeds = {{
+                title = title,
+                description = desc,
+                color = color,
+                fields = {
+                    { name = "Akun", value = nz(lp.Name), inline = true },
+                    { name = "PlaceId", value = nz(game.PlaceId), inline = true },
+                    { name = "Server", value = nz(tostring(game.JobId):sub(1, 8)), inline = true },
+                    { name = "Status script", value = nz(tostring(status.Text):sub(1, 100)), inline = false },
+                },
+                timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+            }},
+        })
+    end
+
+    local function onDisconnect(msg)
+        if not alive or not nf.on then return end
+        msg = tostring(msg or "")
+        if msg == "" then return end
+        if os.clock() - lastSent < 20 then return end
+        lastSent = os.clock()
+        local code = tonumber(msg:match("[Ee]rror [Cc]ode:?%s*(%d+)"))
+        local desc = "**Pesan dari game:**\n" .. msg:sub(1, 500)
+        if code then
+            desc = desc .. "\n\n**Kode " .. code .. "**"
+            if CODES[code] then desc = desc .. ": " .. CODES[code] end
+        end
+        task.spawn(function()
+            local okn, err = notify("Karakter terputus / terkick", desc, 15158332)
+            if not okn then warn("Notif Discord gagal: " .. tostring(err)) end
+        end)
+    end
+
+    -- Sumber 1: pesan error resmi Roblox
+    table.insert(conns, GuiService.ErrorMessageChanged:Connect(function()
+        local okm, msg = pcall(function() return GuiService:GetErrorMessage() end)
+        if okm and msg and msg ~= "" then onDisconnect(msg) end
+    end))
+
+    -- Sumber 2 (cadangan): kotak ErrorPrompt di CoreGui
+    task.spawn(function()
+        pcall(function()
+            local cg = game:GetService("CoreGui")
+            local gui2 = cg:WaitForChild("RobloxPromptGui", 10)
+            local overlay = gui2 and gui2:WaitForChild("promptOverlay", 10)
+            if not overlay then return end
+            table.insert(conns, overlay.ChildAdded:Connect(function(ch)
+                if ch.Name ~= "ErrorPrompt" then return end
+                task.wait(0.3)
+                local best = ""
+                for _, d in ipairs(ch:GetDescendants()) do
+                    if d:IsA("TextLabel") and #d.Text > #best then best = d.Text end
+                end
+                onDisconnect(best)
+            end))
+        end)
+    end)
+
+    nf.btn.Activated:Connect(function()
+        if not nf.on and not validUrl(currentUrl()) then
+            status.Text = "Isi URL webhook Discord dulu, lalu tekan Simpan & Tes"
+            return
+        end
+        setNotif(not nf.on)
+        saveNotif()
+        status.Text = "Notif Discord: " .. (nf.on and "aktif" or "mati")
+    end)
+
+    nf.test.Activated:Connect(function()
+        local url = currentUrl()
+        if not validUrl(url) then
+            status.Text = "URL tidak valid (harus URL webhook Discord)"
+            return
+        end
+        stored = url
+        nf.url.Text = MASK
+        saveNotif()
+        status.Text = "Mengirim tes ke Discord..."
+        task.spawn(function()
+            local okn, err = notify("Tes notifikasi",
+                "Webhook terhubung. Pesan akan dikirim kalau karakter terputus atau terkick.", 3447003)
+            status.Text = okn and "Tes terkirim ke Discord" or ("Tes gagal: " .. tostring(err))
+        end)
+    end)
+
+    nf.ping.FocusLost:Connect(function() saveNotif() end)
+
+    -- Muat pengaturan tersimpan; kirim pesan "script aktif" kalau notifikasi ON
+    if hasFS then
+        pcall(function()
+            if isfile(NOTIF_FILE) then
+                local d = HttpService:JSONDecode(readfile(NOTIF_FILE))
+                if type(d) == "table" then
+                    if type(d.url) == "string" and validUrl(d.url) then
+                        stored = d.url
+                        nf.url.Text = MASK
+                    end
+                    if type(d.ping) == "string" then nf.ping.Text = d.ping end
+                    setNotif(d.on == true and stored ~= "")
+                end
+            end
+        end)
+    end
+    if nf.on then
+        task.spawn(function()
+            notify("Script aktif",
+                "Script dijalankan. Kalau pesan ini muncul tanpa Anda menjalankannya, berarti game reconnect dan script ter-eksekusi ulang.",
+                3066993)
+        end)
+    end
+end
 
 -- ===== Minimize / close =====
 local minimized = false
