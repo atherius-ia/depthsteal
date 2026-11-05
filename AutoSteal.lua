@@ -243,6 +243,7 @@ tr.posBtn = mkBtn(mkRow(32), "Set Posisi Training", COL_BLUE)
 tr.posBtn.Size = UDim2.new(1, 0, 1, 0)
 tr.promptBox = mkField("Teks prompt training (opsional)", "")
 tr.nameBox = mkField("Nama objek training (opsional)", "")
+tr.seatBox = mkField("Folder/nama kursi training", "RowingMachines")
 tr.scanBtn = mkBtn(mkRow(32), "Scan Area Training (ke log)", COL_GREY)
 tr.scanBtn.Size = UDim2.new(1, 0, 1, 0)
 
@@ -395,7 +396,8 @@ local function refresh()
         z.btn.BackgroundColor3 = (i == selected) and COL_BLUE or COL_GREY
     end
     info.Text = string.format("Zona: %d | Depan: %s | Latih: %s",
-        #zones, frontPos and "OK" or "-", (tr.pos or tr.rel) and "OK" or "-")
+        #zones, frontPos and "OK" or "-",
+        (tr.pos or tr.rel or tostring(tr.seatBox.Text):match("%S")) and "OK" or "-")
 end
 refresh()
 
@@ -1107,8 +1109,9 @@ local function doSteals(z, radius, speed, id)
 end
 
 -- ===== Auto masuk Training =====
--- Jalan ke posisi training yang disimpan; kalau training belum mulai sendiri,
--- tekan prompt terdekat di sekitar posisi itu. Hanya aktif saat Auto Steal tidak berjalan.
+-- Jalan ke kursi mesin dayung kosong terdekat (atau posisi training yang disimpan) lalu duduk;
+-- kalau training belum mulai sendiri, tekan prompt terdekat di sekitar posisi itu.
+-- Hanya aktif saat Auto Steal tidak berjalan.
 do
     local function inTraining()
         return attr("State") == "Training"
@@ -1216,12 +1219,60 @@ do
         return bestPos
     end
 
-    -- Daftar target: nama objek -> relatif ke spawn -> posisi absolut
+    -- Cari kursi kosong terdekat yang path-nya mengandung kata kunci
+    local function findFreeSeat(key)
+        local hrp = getHRP()
+        if not hrp then return nil end
+        local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+        key = key:lower()
+        local best, bd
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if (d:IsA("Seat") or d:IsA("VehicleSeat")) and not d.Disabled
+                and (d.Occupant == nil or d.Occupant == hum)
+                and d:GetFullName():lower():find(key, 1, true) then
+                local dist = (d.Position - hrp.Position).Magnitude
+                if not best or dist < bd then best, bd = d, dist end
+            end
+        end
+        return best
+    end
+
+    -- Jatuhkan karakter tepat di atas kursi supaya sentuhan memicu duduk
+    local function trySit(seat)
+        local hrp = getHRP()
+        local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+        if not (hrp and hum) then return end
+        if hum.SeatPart ~= seat then
+            hrp.CFrame = seat.CFrame * CFrame.new(0, 2, 0)
+            hrp.AssemblyLinearVelocity = Vector3.zero
+        end
+        local t0 = os.clock()
+        while alive and trainOn and not running and os.clock() - t0 < 2
+            and hum.SeatPart ~= seat do
+            task.wait(0.1)
+        end
+        if hum.SeatPart ~= seat then
+            pcall(function() seat:Sit(hum) end) -- cadangan, mungkin tidak ada di versi Roblox ini
+            task.wait(0.5)
+        end
+        if logOn then
+            logLine("[kursi] " .. seat:GetFullName() .. " duduk=" .. tostring(hum.SeatPart == seat))
+        end
+    end
+
+    -- Daftar target: kursi -> nama objek -> relatif ke spawn -> posisi absolut
     local function targets()
         local list = {}
         local hrp = getHRP()
         if not hrp then return list end
         local from = hrp.Position
+        local skey = tostring(tr.seatBox.Text):match("^%s*(.-)%s*$")
+        if skey ~= "" then
+            local seat = findFreeSeat(skey)
+            if seat then
+                list[#list + 1] = { label = "kursi", pos = seat.Position + Vector3.new(0, 3, 0), seat = seat }
+            end
+        end
         local key = tostring(tr.nameBox.Text):match("^%s*(.-)%s*$")
         if key ~= "" then
             local pos = findByName(key, from)
@@ -1330,15 +1381,21 @@ do
                 lastTry = os.clock()
                 local list = targets()
                 if #list == 0 then
-                    local has = tr.pos or tr.rel or tostring(tr.nameBox.Text):match("%S")
-                    status.Text = has and "Training: target di luar jangkauan (server beda?), Set ulang"
-                        or "Training: atur Set Posisi Training dulu"
+                    local skey = tostring(tr.seatBox.Text):match("%S")
+                    if skey then
+                        status.Text = "Training: tidak ada kursi kosong ditemukan"
+                    else
+                        local has = tr.pos or tr.rel or tostring(tr.nameBox.Text):match("%S")
+                        status.Text = has and "Training: target di luar jangkauan (server beda?), Set ulang"
+                            or "Training: isi nama kursi atau Set Posisi Training dulu"
+                    end
                 else
                     local i = (tr.try % #list) + 1
                     local t = list[i]
                     local speed = clamp(tonumber(speedBox.Text) or 60, 5, 500)
                     status.Text = "Training: menuju posisi (" .. t.label .. ")"
                     if trainWalk(t.pos, speed, 2) then
+                        if t.seat then trySit(t.seat) end
                         status.Text = "Training: menunggu mulai"
                         if not waitTraining(4) and alive and trainOn and not running then
                             local p = findTrainPrompt(t.pos)
@@ -1571,6 +1628,7 @@ local fieldMap = {
     cineKey = cineKeyBox,
     trainPrompt = tr.promptBox,
     trainName = tr.nameBox,
+    trainSeat = tr.seatBox,
     cineTimeout = cineTimeoutBox,
     waitFront = frontBox,
     radius = radiusBox,
