@@ -41,6 +41,9 @@ local skipGuardOn, skipCatchOn, logOn = false, false, false
 local cineCount = 0 -- bertambah tiap GUI "tunggu setelah steal" muncul
 local nf = { on = false } -- elemen & status notifikasi Discord
 local tr = {} -- elemen & posisi training
+local bs = { on = false, mode = 1 } -- elemen & status auto boss
+local bossBusy = false -- true selama rutinitas boss berjalan (training berhenti sementara)
+local setBoss, setClickMode -- diisi di modul Auto Boss
 local startClock = os.clock()
 local frontPos
 local zones, selected, zoneCounter = {}, nil, 0
@@ -75,6 +78,11 @@ local function round(o, r)
     c.Parent = o
 end
 
+local COL_BLUE = Color3.fromRGB(60, 120, 200)
+local COL_GREY = Color3.fromRGB(55, 55, 70)
+local COL_RED = Color3.fromRGB(180, 40, 40)
+local COL_GREEN = Color3.fromRGB(40, 150, 60)
+
 local cam = workspace.CurrentCamera
 local vh = cam and cam.ViewportSize.Y or 420
 local FULL_H = clamp(vh - 40, 220, 520)
@@ -99,7 +107,7 @@ local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -80, 1, 0)
 title.Position = UDim2.new(0, 10, 0, 0)
 title.BackgroundTransparency = 1
-title.Text = "Training + Steal + Egg"
+title.Text = "Training + Boss + Steal"
 title.TextColor3 = Color3.new(1, 1, 1)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 13
@@ -122,27 +130,73 @@ end
 local minBtn = barButton("-", -62, Color3.fromRGB(90, 90, 110))
 local closeBtn = barButton("X", -32, Color3.fromRGB(190, 60, 60))
 
-local body = Instance.new("ScrollingFrame")
-body.Size = UDim2.new(1, 0, 1, -32)
-body.Position = UDim2.new(0, 0, 0, 32)
-body.BackgroundTransparency = 1
-body.BorderSizePixel = 0
-body.ScrollBarThickness = 4
-body.CanvasSize = UDim2.new(0, 0, 0, 0)
-body.AutomaticCanvasSize = Enum.AutomaticSize.Y
-body.Parent = main
+-- Isi jendela (disembunyikan saat minimize): bar tab, halaman, dan footer status
+local content = Instance.new("Frame")
+content.Size = UDim2.new(1, 0, 1, -32)
+content.Position = UDim2.new(0, 0, 0, 32)
+content.BackgroundTransparency = 1
+content.Parent = main
 
-local list = Instance.new("UIListLayout")
-list.Padding = UDim.new(0, 6)
-list.SortOrder = Enum.SortOrder.LayoutOrder
-list.Parent = body
-local pad = Instance.new("UIPadding")
-pad.PaddingTop = UDim.new(0, 8)
-pad.PaddingBottom = UDim.new(0, 8)
-pad.PaddingLeft = UDim.new(0, 8)
-pad.PaddingRight = UDim.new(0, 12)
-pad.Parent = body
+local tabBar = Instance.new("ScrollingFrame")
+tabBar.Size = UDim2.new(1, 0, 0, 30)
+tabBar.BackgroundTransparency = 1
+tabBar.BorderSizePixel = 0
+tabBar.ScrollBarThickness = 0
+tabBar.CanvasSize = UDim2.new(0, 0, 0, 0)
+tabBar.AutomaticCanvasSize = Enum.AutomaticSize.X
+tabBar.ScrollingDirection = Enum.ScrollingDirection.X
+tabBar.Parent = content
+do
+    local tl = Instance.new("UIListLayout")
+    tl.FillDirection = Enum.FillDirection.Horizontal
+    tl.Padding = UDim.new(0, 4)
+    tl.SortOrder = Enum.SortOrder.LayoutOrder
+    tl.Parent = tabBar
+    local tp = Instance.new("UIPadding")
+    tp.PaddingLeft = UDim.new(0, 8)
+    tp.PaddingRight = UDim.new(0, 8)
+    tp.PaddingTop = UDim.new(0, 3)
+    tp.PaddingBottom = UDim.new(0, 3)
+    tp.Parent = tabBar
+end
 
+local pagesHolder = Instance.new("Frame")
+pagesHolder.Position = UDim2.new(0, 0, 0, 30)
+pagesHolder.Size = UDim2.new(1, 0, 1, -82)
+pagesHolder.BackgroundTransparency = 1
+pagesHolder.ClipsDescendants = true
+pagesHolder.Parent = content
+
+local footer = Instance.new("Frame")
+footer.Position = UDim2.new(0, 0, 1, -52)
+footer.Size = UDim2.new(1, 0, 0, 52)
+footer.BackgroundTransparency = 1
+footer.Parent = content
+
+local info = Instance.new("TextLabel")
+info.Position = UDim2.new(0, 10, 0, 0)
+info.Size = UDim2.new(1, -20, 0, 16)
+info.BackgroundTransparency = 1
+info.TextColor3 = Color3.fromRGB(200, 200, 210)
+info.Font = Enum.Font.Gotham
+info.TextSize = 11
+info.TextXAlignment = Enum.TextXAlignment.Left
+info.Parent = footer
+
+local status = Instance.new("TextLabel")
+status.Position = UDim2.new(0, 10, 0, 16)
+status.Size = UDim2.new(1, -20, 0, 34)
+status.BackgroundTransparency = 1
+status.TextColor3 = Color3.fromRGB(255, 220, 120)
+status.Font = Enum.Font.Gotham
+status.TextSize = 12
+status.TextWrapped = true
+status.TextXAlignment = Enum.TextXAlignment.Left
+status.TextYAlignment = Enum.TextYAlignment.Top
+status.Text = "Siap"
+status.Parent = footer
+
+local cur -- halaman (tab) yang sedang diisi
 local order = 0
 local function nxt() order += 1 return order end
 
@@ -163,7 +217,7 @@ local function mkRow(h)
     r.Size = UDim2.new(1, 0, 0, h or 32)
     r.BackgroundTransparency = 1
     r.LayoutOrder = nxt()
-    r.Parent = body
+    r.Parent = cur
     return r
 end
 
@@ -216,28 +270,84 @@ local function mkField(label, default)
     return t
 end
 
-local COL_BLUE = Color3.fromRGB(60, 120, 200)
-local COL_GREY = Color3.fromRGB(55, 55, 70)
-local COL_RED = Color3.fromRGB(180, 40, 40)
-local COL_GREEN = Color3.fromRGB(40, 150, 60)
+-- Label teks biasa satu baris (untuk status per menu)
+local function mkInfoLabel(h, text, color)
+    local r = mkRow(h)
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.new(1, 0, 1, 0)
+    l.BackgroundTransparency = 1
+    l.TextColor3 = color or Color3.fromRGB(200, 200, 210)
+    l.Font = Enum.Font.Gotham
+    l.TextSize = 12
+    l.TextWrapped = true
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.TextYAlignment = Enum.TextYAlignment.Top
+    l.Text = text
+    l.Parent = r
+    return l
+end
 
--- ===== Menu AUTO TRAINING =====
+-- Sistem tab: tiap fitur punya halaman sendiri
+local pages, tabBtns, firstTab = {}, {}, nil
+local function selectTab(name)
+    for n, p in pairs(pages) do
+        p.Visible = (n == name)
+        tabBtns[n].BackgroundColor3 = (n == name) and COL_BLUE or COL_GREY
+    end
+end
+
+local function newTab(name)
+    local page = Instance.new("ScrollingFrame")
+    page.Size = UDim2.new(1, 0, 1, 0)
+    page.BackgroundTransparency = 1
+    page.BorderSizePixel = 0
+    page.ScrollBarThickness = 4
+    page.CanvasSize = UDim2.new(0, 0, 0, 0)
+    page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    page.Visible = false
+    page.Parent = pagesHolder
+
+    local l = Instance.new("UIListLayout")
+    l.Padding = UDim.new(0, 6)
+    l.SortOrder = Enum.SortOrder.LayoutOrder
+    l.Parent = page
+    local p = Instance.new("UIPadding")
+    p.PaddingTop = UDim.new(0, 6)
+    p.PaddingBottom = UDim.new(0, 8)
+    p.PaddingLeft = UDim.new(0, 8)
+    p.PaddingRight = UDim.new(0, 12)
+    p.Parent = page
+
+    local tb = Instance.new("TextButton")
+    tb.Size = UDim2.new(0, math.max(54, #name * 8 + 18), 1, 0)
+    tb.BackgroundColor3 = COL_GREY
+    tb.Text = name
+    tb.TextColor3 = Color3.new(1, 1, 1)
+    tb.Font = Enum.Font.GothamBold
+    tb.TextSize = 11
+    tb.LayoutOrder = nxt()
+    tb.Parent = tabBar
+    round(tb, 6)
+
+    pages[name] = page
+    tabBtns[name] = tb
+    tb.Activated:Connect(function() selectTab(name) end)
+    cur = page
+    if not firstTab then
+        firstTab = name
+        selectTab(name)
+    end
+end
+
+-- ===== Tab TRAINING =====
+newTab("Training")
 mkHeader("AUTO TRAINING")
 
 local trainBtn = mkBtn(mkRow(38), "Auto Training: OFF", COL_RED)
 trainBtn.Size = UDim2.new(1, 0, 1, 0)
 trainBtn.TextSize = 14
 
-local trainRow = mkRow(18)
-local trainStatus = Instance.new("TextLabel")
-trainStatus.Size = UDim2.new(1, 0, 1, 0)
-trainStatus.BackgroundTransparency = 1
-trainStatus.TextColor3 = Color3.fromRGB(200, 200, 210)
-trainStatus.Font = Enum.Font.Gotham
-trainStatus.TextSize = 12
-trainStatus.TextXAlignment = Enum.TextXAlignment.Left
-trainStatus.Text = "Boost terkirim: 0"
-trainStatus.Parent = trainRow
+local trainStatus = mkInfoLabel(18, "Boost terkirim: 0")
 
 tr.posBtn = mkBtn(mkRow(32), "Set Posisi Training", COL_BLUE)
 tr.posBtn.Size = UDim2.new(1, 0, 1, 0)
@@ -247,42 +357,45 @@ tr.seatBox = mkField("Folder/nama kursi training", "RowingMachines")
 tr.scanBtn = mkBtn(mkRow(32), "Scan Area Training (ke log)", COL_GREY)
 tr.scanBtn.Size = UDim2.new(1, 0, 1, 0)
 
--- ===== Menu ANTI AFK =====
-mkHeader("ANTI AFK")
+-- ===== Tab BOSS =====
+newTab("Boss")
+mkHeader("AUTO BOSS (prioritas di atas training)")
 
-local afkBtn = mkBtn(mkRow(32), "Anti-AFK: ON", COL_GREEN)
-afkBtn.Size = UDim2.new(1, 0, 1, 0)
+bs.btn = mkBtn(mkRow(38), "Auto Boss: OFF", COL_RED)
+bs.btn.Size = UDim2.new(1, 0, 1, 0)
+bs.btn.TextSize = 14
 
-local afkRow = mkRow(18)
-local afkStatus = Instance.new("TextLabel")
-afkStatus.Size = UDim2.new(1, 0, 1, 0)
-afkStatus.BackgroundTransparency = 1
-afkStatus.TextColor3 = Color3.fromRGB(200, 200, 210)
-afkStatus.Font = Enum.Font.Gotham
-afkStatus.TextSize = 12
-afkStatus.TextXAlignment = Enum.TextXAlignment.Left
-afkStatus.Text = "Aktif 0:00:00 | Dicegah: 0"
-afkStatus.Parent = afkRow
+bs.status = mkInfoLabel(30, "Boss: mati")
 
--- ===== Menu CONFIG =====
-mkHeader("CONFIG")
+bs.setZone = mkBtn(mkRow(32), "Set Zona Boss (posisi saya)", COL_BLUE)
+bs.setZone.Size = UDim2.new(1, 0, 1, 0)
 
-local cfgNameBox = mkField("Nama config", "default")
-local btnSave, btnLoad = twoBtns("Save Config", COL_BLUE, "Load Config", COL_BLUE)
-local btnList, btnAuto = twoBtns("Daftar Config", COL_GREY, "Auto-load: OFF", COL_GREY)
+bs.keyBox = mkField("Teks notif boss", "fight in")
+bs.filterBox = mkField("Filter nama boss (opsional)", "")
+bs.goBox = mkField("Teks tombol GO", "go")
+bs.afterGoBox = mkField("Tunggu teleport setelah GO (dtk)", "4")
+bs.nameBox = mkField("Nama objek boss (opsional)", "")
+bs.rangeBox = mkField("Teks IN RANGE", "in range")
+bs.fireBox = mkField("Teks tombol FIRE", "fire")
+bs.fightMaxBox = mkField("Batas waktu fight (dtk)", "240")
+bs.tpBox = mkField("Teks tombol TP (acuan rumah)", "ocean")
+bs.homeNameBox = mkField("Nama tombol rumah (opsional)", "home")
+bs.clickYBox = mkField("Offset klik Y (px)", "0")
 
--- ===== Menu NOTIF DISCORD =====
-mkHeader("NOTIF DISCORD (disconnect/kick)")
+bs.modeBtn = mkBtn(mkRow(32), "Metode klik: SINYAL+SENTUH", COL_GREY)
+bs.modeBtn.Size = UDim2.new(1, 0, 1, 0)
 
-nf.url = mkField("URL webhook", "")
-nf.ping = mkField("ID Discord (ping, opsional)", "")
-nf.btn = mkBtn(mkRow(32), "Notif Discord: OFF", COL_GREY)
-nf.btn.Size = UDim2.new(1, 0, 1, 0)
-nf.test = mkBtn(mkRow(32), "Simpan & Tes Webhook", COL_BLUE)
-nf.test.Size = UDim2.new(1, 0, 1, 0)
+bs.testGo, bs.testHome = twoBtns("Tes GO", COL_GREY, "Tes Rumah", COL_GREY)
+bs.testFire = mkBtn(mkRow(32), "Tes FIRE", COL_GREY)
+bs.testFire.Size = UDim2.new(1, 0, 1, 0)
 
--- ===== Menu AUTO STEAL =====
+-- ===== Tab STEAL =====
+newTab("Steal")
 mkHeader("AUTO STEAL + PICKUP EGG")
+
+local toggle = mkBtn(mkRow(40), "Auto Steal: OFF", COL_RED)
+toggle.Size = UDim2.new(1, 0, 1, 0)
+toggle.TextSize = 16
 
 local btnAdd, btnDel = twoBtns("Simpan Zona", COL_BLUE, "Hapus Zona", COL_RED)
 
@@ -291,7 +404,7 @@ zoneBox.Size = UDim2.new(1, 0, 0, 0)
 zoneBox.AutomaticSize = Enum.AutomaticSize.Y
 zoneBox.BackgroundTransparency = 1
 zoneBox.LayoutOrder = nxt()
-zoneBox.Parent = body
+zoneBox.Parent = cur
 local zl = Instance.new("UIListLayout")
 zl.Padding = UDim.new(0, 4)
 zl.Parent = zoneBox
@@ -330,6 +443,8 @@ keepYBtn.Size = UDim2.new(1, 0, 1, 0)
 local syncBtn = mkBtn(mkRow(32), "Sinkron tinggi di Depan: ON", COL_GREEN)
 syncBtn.Size = UDim2.new(1, 0, 1, 0)
 
+-- ===== Tab SKIP CINEMATIC =====
+newTab("Skip")
 mkHeader("SKIP CINEMATIC (eksperimental)")
 
 local guardKeyBox = mkField("Kata kunci guardian", "guardian,entrance")
@@ -340,6 +455,10 @@ skipGuardBtn.Size = UDim2.new(1, 0, 1, 0)
 
 local skipCatchBtn = mkBtn(mkRow(32), "Skip Catch Cinematic: OFF", COL_GREY)
 skipCatchBtn.Size = UDim2.new(1, 0, 1, 0)
+
+-- ===== Tab LOG =====
+newTab("Log")
+mkHeader("LOG & ALAT BANTU")
 
 local logBtn = mkBtn(mkRow(32), "Log GUI dan kamera: OFF", COL_GREY)
 logBtn.Size = UDim2.new(1, 0, 1, 0)
@@ -361,43 +480,51 @@ round(logLabel, 6)
 
 local btnCopyLog, btnClearLog = twoBtns("Salin Log", COL_BLUE, "Hapus Log", COL_GREY)
 
-local liftBtn = mkBtn(mkRow(32), "Naikkan posisi +5 Y (darurat)", COL_GREY)
-liftBtn.Size = UDim2.new(1, 0, 1, 0)
+bs.scanGui = mkBtn(mkRow(32), "Scan GUI tampil (tombol & teks)", COL_GREY)
+bs.scanGui.Size = UDim2.new(1, 0, 1, 0)
 
 local scanBtn = mkBtn(mkRow(32), "Scan Prompt di Sekitar Saya", COL_GREY)
 scanBtn.Size = UDim2.new(1, 0, 1, 0)
 
-local toggle = mkBtn(mkRow(40), "Auto Steal: OFF", COL_RED)
-toggle.Size = UDim2.new(1, 0, 1, 0)
-toggle.TextSize = 16
+local liftBtn = mkBtn(mkRow(32), "Naikkan posisi +5 Y (darurat)", COL_GREY)
+liftBtn.Size = UDim2.new(1, 0, 1, 0)
 
-local infoRow = mkRow(18)
-local info = Instance.new("TextLabel")
-info.Size = UDim2.new(1, 0, 1, 0)
-info.BackgroundTransparency = 1
-info.TextColor3 = Color3.fromRGB(200, 200, 210)
-info.Font = Enum.Font.Gotham
-info.TextSize = 12
-info.Parent = infoRow
+-- ===== Tab CONFIG =====
+newTab("Config")
+mkHeader("CONFIG")
 
-local statusRow = mkRow(36)
-local status = Instance.new("TextLabel")
-status.Size = UDim2.new(1, 0, 1, 0)
-status.BackgroundTransparency = 1
-status.TextColor3 = Color3.fromRGB(255, 220, 120)
-status.Font = Enum.Font.Gotham
-status.TextSize = 12
-status.TextWrapped = true
-status.Text = "Siap"
-status.Parent = statusRow
+local cfgNameBox = mkField("Nama config", "default")
+local btnSave, btnLoad = twoBtns("Save Config", COL_BLUE, "Load Config", COL_BLUE)
+local btnList, btnAuto = twoBtns("Daftar Config", COL_GREY, "Auto-load: OFF", COL_GREY)
+
+-- ===== Tab NOTIF DISCORD =====
+newTab("Discord")
+mkHeader("NOTIF DISCORD (disconnect/kick)")
+
+nf.url = mkField("URL webhook", "")
+nf.ping = mkField("ID Discord (ping, opsional)", "")
+nf.btn = mkBtn(mkRow(32), "Notif Discord: OFF", COL_GREY)
+nf.btn.Size = UDim2.new(1, 0, 1, 0)
+nf.test = mkBtn(mkRow(32), "Simpan & Tes Webhook", COL_BLUE)
+nf.test.Size = UDim2.new(1, 0, 1, 0)
+
+-- ===== Tab ANTI AFK =====
+newTab("AFK")
+mkHeader("ANTI AFK")
+
+local afkBtn = mkBtn(mkRow(32), "Anti-AFK: ON", COL_GREEN)
+afkBtn.Size = UDim2.new(1, 0, 1, 0)
+
+local afkStatus = mkInfoLabel(18, "Aktif 0:00:00 | Dicegah: 0")
 
 local function refresh()
     for i, z in ipairs(zones) do
         z.btn.BackgroundColor3 = (i == selected) and COL_BLUE or COL_GREY
     end
-    info.Text = string.format("Zona: %d | Depan: %s | Latih: %s",
+    info.Text = string.format("Zona:%d Depan:%s Latih:%s Boss:%s",
         #zones, frontPos and "OK" or "-",
-        (tr.pos or tr.rel or tostring(tr.seatBox.Text):match("%S")) and "OK" or "-")
+        (tr.pos or tr.rel or tostring(tr.seatBox.Text):match("%S")) and "OK" or "-",
+        bs.pos and "OK" or "-")
 end
 refresh()
 
@@ -714,7 +841,7 @@ logBtn.Activated:Connect(function()
     logBtn.BackgroundColor3 = logOn and COL_GREEN or COL_GREY
     if logOn then
         logLine("== Log aktif. Picu cinematic sekarang ==")
-        status.Text = "Log aktif: lihat kotak log di menu"
+        status.Text = "Log aktif: lihat kotak log di tab Log"
     else
         status.Text = "Log dimatikan"
     end
@@ -1111,7 +1238,8 @@ end
 -- ===== Auto masuk Training =====
 -- Jalan ke kursi mesin dayung kosong terdekat (atau posisi training yang disimpan) lalu duduk;
 -- kalau training belum mulai sendiri, tekan prompt terdekat di sekitar posisi itu.
--- Hanya aktif saat Auto Steal tidak berjalan.
+-- Hanya aktif saat Auto Steal tidak berjalan dan rutinitas boss tidak sedang berjalan.
+tr.retryNow = false -- diisi true oleh modul boss supaya training langsung dilanjutkan
 do
     local function inTraining()
         return attr("State") == "Training"
@@ -1119,7 +1247,7 @@ do
 
     local function trainWalk(target, speed, stopDist)
         local t0 = os.clock()
-        while alive and trainOn and not running do
+        while alive and trainOn and not running and not bossBusy do
             local hrp = getHRP()
             if not hrp then return false end
             local delta = target - hrp.Position
@@ -1143,7 +1271,7 @@ do
 
     local function waitTraining(maxT)
         local t0 = os.clock()
-        while alive and trainOn and not running and os.clock() - t0 < maxT do
+        while alive and trainOn and not running and not bossBusy and os.clock() - t0 < maxT do
             if inTraining() then return true end
             task.wait(0.2)
         end
@@ -1247,7 +1375,7 @@ do
             hrp.AssemblyLinearVelocity = Vector3.zero
         end
         local t0 = os.clock()
-        while alive and trainOn and not running and os.clock() - t0 < 2
+        while alive and trainOn and not running and not bossBusy and os.clock() - t0 < 2
             and hum.SeatPart ~= seat do
             task.wait(0.1)
         end
@@ -1376,8 +1504,10 @@ do
         tr.try = 0
         while alive do
             local st = attr("State")
-            if trainOn and not running and getHRP()
-                and st ~= nil and st ~= "Training" and os.clock() - lastTry >= 12 then
+            if trainOn and not running and not bossBusy and getHRP()
+                and st ~= nil and st ~= "Training"
+                and (os.clock() - lastTry >= 12 or tr.retryNow) then
+                tr.retryNow = false
                 lastTry = os.clock()
                 local list = targets()
                 if #list == 0 then
@@ -1397,7 +1527,7 @@ do
                     if trainWalk(t.pos, speed, 2) then
                         if t.seat then trySit(t.seat) end
                         status.Text = "Training: menunggu mulai"
-                        if not waitTraining(4) and alive and trainOn and not running then
+                        if not waitTraining(4) and alive and trainOn and not running and not bossBusy then
                             local p = findTrainPrompt(t.pos)
                             if p then
                                 status.Text = "Training: menekan " .. tostring(p.ObjectText)
@@ -1431,6 +1561,481 @@ do
                     .. tostring(boostRemote ~= nil))
             end
         end)
+    end)
+end
+
+-- ===== Auto Boss =====
+-- Alur: notifikasi boss muncul -> tekan GO -> (game teleport ke area boss) -> jalan ke zona boss
+-- sampai IN RANGE -> tekan FIRE berulang sampai fight selesai -> tekan tombol rumah ->
+-- Auto Training lanjut sendiri. Berjalan hanya saat Auto Steal tidak aktif.
+-- Semua elemen GUI game dicari lewat TEKS yang terlihat, bukan nama objek, jadi tidak perlu tahu path-nya.
+do
+    local GuiService = game:GetService("GuiService")
+    local VIM
+    pcall(function() VIM = game:GetService("VirtualInputManager") end)
+
+    local function say(s)
+        bs.status.Text = "Boss: " .. s
+        status.Text = "Boss: " .. s
+    end
+
+    -- Normalisasi teks: huruf kecil, tanpa tanda baca, spasi tunggal ("GO!" -> "go")
+    local function norm(s)
+        s = tostring(s or ""):lower():gsub("[^%w%s]", "")
+        s = s:gsub("%s+", " ")
+        return (s:match("^%s*(.-)%s*$"))
+    end
+
+    -- Terlihat = objek dan semua induknya Visible, ScreenGui-nya Enabled
+    local function visibleDeep(o)
+        local c = o
+        while c and c ~= game do
+            if c:IsA("GuiObject") and not c.Visible then return false end
+            if c:IsA("ScreenGui") then return c.Enabled end
+            c = c.Parent
+        end
+        return false
+    end
+
+    -- Cari teks yang terlihat. exact=true: teks harus persis sama; false: mengandung kata kunci.
+    -- Mengembalikan tombol terdekat (GuiButton) yang membungkus teks itu, atau teksnya sendiri.
+    local function findByText(key, root, exact)
+        key = norm(key)
+        if key == "" then return nil end
+        for _, o in ipairs((root or pg):GetDescendants()) do
+            if (o:IsA("TextLabel") or o:IsA("TextButton")) and o.Text ~= "" and not o:IsDescendantOf(gui) then
+                local t = norm(o.Text)
+                local hit
+                if exact then hit = (t == key) else hit = (t:find(key, 1, true) ~= nil) end
+                if hit and o.AbsoluteSize.X > 1 and visibleDeep(o) then
+                    local btn = (o:IsA("GuiButton") and o) or o:FindFirstAncestorWhichIsA("GuiButton") or o
+                    return btn, o
+                end
+            end
+        end
+        return nil
+    end
+
+    local function groupText(root)
+        local parts = {}
+        for _, d in ipairs(root:GetDescendants()) do
+            if (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text ~= "" then
+                parts[#parts + 1] = norm(d.Text)
+            end
+        end
+        return table.concat(parts, " ")
+    end
+
+    -- Notifikasi boss: label "FIGHT IN ..." yang terlihat, lalu cari tombol GO di wadah yang sama
+    local function findNotice()
+        local key = norm(bs.keyBox.Text)
+        if key == "" then return nil end
+        local filt = norm(bs.filterBox.Text)
+        local goKey = bs.goBox.Text
+        for _, o in ipairs(pg:GetDescendants()) do
+            if (o:IsA("TextLabel") or o:IsA("TextButton")) and o.Text ~= "" and not o:IsDescendantOf(gui)
+                and norm(o.Text):find(key, 1, true) and visibleDeep(o) then
+                local anc = o.Parent
+                for _ = 1, 5 do
+                    if not anc or anc == pg then break end
+                    local goBtn = findByText(goKey, anc, true)
+                    if goBtn then
+                        if filt == "" or groupText(anc):find(filt, 1, true) then
+                            return goBtn, o
+                        end
+                        break
+                    end
+                    anc = anc.Parent
+                end
+            end
+        end
+        return nil
+    end
+
+    local function findFire()
+        return (findByText(bs.fireBox.Text, nil, true))
+    end
+
+    local function inRange()
+        return findByText(bs.rangeBox.Text, nil, false) ~= nil
+    end
+
+    -- Tombol rumah (ikon tanpa teks): cari berdasarkan nama, kalau tidak ada ambil tombol
+    -- tepat di kiri tombol "TP TO OCEAN" pada baris yang sama
+    local function findHomeBtn()
+        local hkey = tostring(bs.homeNameBox.Text):lower():match("^%s*(.-)%s*$")
+        if hkey ~= "" then
+            for _, o in ipairs(pg:GetDescendants()) do
+                if o:IsA("GuiButton") and not o:IsDescendantOf(gui)
+                    and o.Name:lower():find(hkey, 1, true) and o.AbsoluteSize.X > 1 and visibleDeep(o) then
+                    return o
+                end
+            end
+        end
+        for _, k in ipairs(splitKeys(bs.tpBox.Text)) do
+            local tpBtn = findByText(k, nil, false)
+            if tpBtn then
+                local tpPos = tpBtn.AbsolutePosition
+                local tpCy = tpPos.Y + tpBtn.AbsoluteSize.Y / 2
+                local root = tpBtn
+                for _ = 1, 3 do
+                    local p = root.Parent
+                    if not p or p:IsA("PlayerGui") then break end
+                    root = p
+                end
+                local best, bx
+                for _, o in ipairs(root:GetDescendants()) do
+                    if o:IsA("GuiButton") and o ~= tpBtn and not o:IsDescendantOf(tpBtn)
+                        and o.AbsoluteSize.X > 1 and visibleDeep(o) then
+                        local cy = o.AbsolutePosition.Y + o.AbsoluteSize.Y / 2
+                        local right = o.AbsolutePosition.X + o.AbsoluteSize.X
+                        if math.abs(cy - tpCy) < 30 and right <= tpPos.X + 4 and (not best or right > bx) then
+                            best, bx = o, right
+                        end
+                    end
+                end
+                if best then return best end
+            end
+        end
+        return nil
+    end
+
+    -- Kotak merah sesaat di atas elemen yang ditemukan (untuk memeriksa deteksi lewat tombol Tes)
+    local function flash(g)
+        pcall(function()
+            local f = Instance.new("Frame")
+            f.BackgroundTransparency = 1
+            f.Position = UDim2.fromOffset(g.AbsolutePosition.X, g.AbsolutePosition.Y)
+            f.Size = UDim2.fromOffset(g.AbsoluteSize.X, g.AbsoluteSize.Y)
+            f.ZIndex = 100
+            local s = Instance.new("UIStroke")
+            s.Color = Color3.fromRGB(255, 40, 40)
+            s.Thickness = 3
+            s.Parent = f
+            f.Parent = gui
+            task.delay(1.5, function() f:Destroy() end)
+        end)
+    end
+
+    local function guiCenter(g)
+        local p, s = g.AbsolutePosition, g.AbsoluteSize
+        local x, y = p.X + s.X / 2, p.Y + s.Y / 2
+        local sg = g:FindFirstAncestorWhichIsA("ScreenGui")
+        if not (sg and sg.IgnoreGuiInset) then
+            local inset = GuiService:GetGuiInset()
+            x, y = x + inset.X, y + inset.Y
+        end
+        return x, y + (tonumber(bs.clickYBox.Text) or 0)
+    end
+
+    -- mode 1 = sinyal + sentuh, 2 = sentuh saja, 3 = sinyal saja
+    local function clickGui(g, forceMode)
+        if not g or not g.Parent then return false end
+        local mode = forceMode or bs.mode
+        local did = false
+        if mode == 1 or mode == 3 then
+            local btn = (g:IsA("GuiButton") and g) or g:FindFirstAncestorWhichIsA("GuiButton")
+            if btn then
+                for _, name in ipairs({ "Activated", "MouseButton1Click" }) do
+                    local sig = btn[name]
+                    if firesignal then
+                        if pcall(firesignal, sig) then did = true end
+                    elseif getconnections then
+                        local okc, cons = pcall(getconnections, sig)
+                        if okc and type(cons) == "table" then
+                            for _, c in ipairs(cons) do
+                                if pcall(function() c:Fire() end) then did = true end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if mode == 1 or mode == 2 then
+            if VIM then
+                local x, y = guiCenter(g)
+                local okt = pcall(function()
+                    VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
+                    task.wait(0.05)
+                    VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+                end)
+                if okt then did = true end
+            end
+        end
+        return did
+    end
+
+    -- ===== Gerak boss =====
+    local function walk(target, speed, stopDist, maxT)
+        local t0 = os.clock()
+        while alive and bs.on and not running do
+            local hrp = getHRP()
+            if not hrp then return false end
+            local delta = target - hrp.Position
+            local dist = delta.Magnitude
+            if dist <= stopDist + 0.05 then return true end
+            local dt = RunService.Heartbeat:Wait()
+            local step = math.min(dist - stopDist, speed * dt)
+            local newPos = hrp.Position + delta.Unit * step
+            local flat = Vector3.new(delta.X, 0, delta.Z)
+            if flat.Magnitude > 0.01 then
+                hrp.CFrame = CFrame.lookAt(newPos, newPos + flat)
+            else
+                hrp.CFrame = CFrame.new(newPos) * (hrp.CFrame - hrp.CFrame.Position)
+            end
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+            if os.clock() - t0 > maxT then return false end
+        end
+        return false
+    end
+
+    -- Objek boss di workspace (opsional), dicari sekali lalu disimpan supaya tidak scan berulang
+    local bossObj
+    local function bossObjPos()
+        local key = tostring(bs.nameBox.Text):lower():match("^%s*(.-)%s*$")
+        if key == "" then return nil end
+        if not (bossObj and bossObj.Parent) then
+            bossObj = nil
+            local hrp = getHRP()
+            local bd
+            for _, d in ipairs(workspace:GetDescendants()) do
+                if (d:IsA("Model") or d:IsA("BasePart")) and d.Name:lower():find(key, 1, true)
+                    and not (lp.Character and d:IsDescendantOf(lp.Character)) then
+                    local p = d:IsA("Model") and d:GetPivot().Position or d.Position
+                    local dist = hrp and (p - hrp.Position).Magnitude or 0
+                    if not bossObj or dist < bd then bossObj, bd = d, dist end
+                end
+            end
+        end
+        if bossObj then
+            return bossObj:IsA("Model") and bossObj:GetPivot().Position or bossObj.Position
+        end
+        return nil
+    end
+
+    local function approach(speed)
+        local tgt, stop = bossObjPos(), 12
+        if not tgt then tgt, stop = bs.pos, 2 end
+        if not tgt then return end
+        say("menuju zona boss")
+        walk(tgt, speed, stop, 40)
+    end
+
+    -- ===== Rutinitas boss =====
+    local nextOk = 0 -- waktu paling awal boleh memicu boss lagi
+
+    local function runBoss(goBtn)
+        bossBusy = true
+        bossObj = nil
+        local okr, e = pcall(function()
+            local speed = clamp(tonumber(speedBox.Text) or 60, 5, 500)
+            local hrp = getHRP()
+            if not hrp then return end
+            local start = hrp.Position
+            if logOn then logLine("[boss] mulai, State=" .. tostring(attr("State"))) end
+
+            -- 1) Tekan GO sampai karakter berpindah (teleport ke area boss)
+            local wait = clamp(tonumber(bs.afterGoBox.Text) or 4, 1, 15)
+            local moved = false
+            for attempt = 1, 3 do
+                if not (alive and bs.on) then return end
+                local btn = goBtn
+                if not btn or not btn.Parent or not visibleDeep(btn) then
+                    btn = findNotice()
+                end
+                if not btn then break end
+                say("tekan GO (" .. attempt .. ")")
+                clickGui(btn, attempt > 1 and 1 or nil)
+                local t0 = os.clock()
+                while os.clock() - t0 < wait and alive and bs.on do
+                    task.wait(0.2)
+                    local h = getHRP()
+                    if h and (h.Position - start).Magnitude > 40 then moved = true break end
+                end
+                if moved then break end
+                goBtn = nil
+            end
+            if not moved then
+                nextOk = os.clock() + 90 -- hindari mengulang terus kalau GO tidak berfungsi
+                say("GO tidak memindahkan karakter (cek Tes GO / metode klik)")
+                return
+            end
+            task.wait(0.8)
+            local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+            if hum and hum.SeatPart then pcall(function() hum.Sit = false end) end
+            if logOn then logLine("[boss] setelah GO, State=" .. tostring(attr("State"))) end
+
+            -- 2) Ke zona boss
+            approach(speed)
+
+            -- 3) Tunggu fight mulai, lalu auto fire sampai selesai
+            local fightMax = clamp(tonumber(bs.fightMaxBox.Text) or 240, 30, 900)
+            local tStart = os.clock()
+            local seenFire, lastSeen, lastRange = false, os.clock(), 0
+            local cached
+            say("menunggu fight mulai")
+            while alive and bs.on and not running do
+                local now = os.clock()
+                local fb = cached
+                if not (fb and fb.Parent and visibleDeep(fb)) then
+                    fb = findFire()
+                    cached = fb
+                end
+                if fb then
+                    if not seenFire then
+                        seenFire = true
+                        say("auto fire")
+                        if logOn then logLine("[boss] FIRE terlihat, State=" .. tostring(attr("State"))) end
+                    end
+                    lastSeen = now
+                    clickGui(fb)
+                end
+                if seenFire and now - lastRange > 1.5 then
+                    lastRange = now
+                    if not inRange() then approach(speed) end
+                end
+                if seenFire and now - lastSeen > 4 then break end -- tombol FIRE hilang = fight selesai
+                if not seenFire and now - tStart > 90 then
+                    say("fight tidak mulai (cek teks FIRE)")
+                    break
+                end
+                if now - tStart > fightMax then break end
+                task.wait(0.12)
+            end
+            if not (alive and bs.on) then return end
+
+            -- 4) Pulang lewat tombol rumah
+            task.wait(1.5)
+            say("kembali ke rumah")
+            local before = getHRP() and getHRP().Position
+            local went = false
+            for attempt = 1, 4 do
+                if not (alive and bs.on) then return end
+                local home = findHomeBtn()
+                if home then
+                    clickGui(home, attempt > 1 and 1 or nil)
+                    local t0 = os.clock()
+                    while os.clock() - t0 < 4 and alive and bs.on do
+                        task.wait(0.2)
+                        local h = getHRP()
+                        if h and before and (h.Position - before).Magnitude > 40 then went = true break end
+                    end
+                    if went then break end
+                else
+                    task.wait(1)
+                end
+            end
+            if went then
+                say("selesai, kembali ke training")
+            else
+                say("tombol rumah gagal (cek Tes Rumah)")
+            end
+            task.wait(1)
+        end)
+        if not okr then
+            say("error: " .. tostring(e))
+            warn(e)
+        end
+        nextOk = math.max(nextOk, os.clock() + 30)
+        bossBusy = false
+        tr.retryNow = true -- training langsung dilanjutkan (kalau Auto Training ON)
+    end
+
+    -- Pemantau notifikasi
+    task.spawn(function()
+        while alive do
+            if bs.on and not running and not bossBusy and os.clock() >= nextOk then
+                local goBtn = findNotice()
+                if goBtn then runBoss(goBtn) end
+            end
+            task.wait(0.5)
+        end
+    end)
+
+    -- ===== Kontrol UI =====
+    setBoss = function(on)
+        bs.on = on
+        bs.btn.Text = "Auto Boss: " .. (on and "ON" or "OFF")
+        bs.btn.BackgroundColor3 = on and COL_GREEN or COL_RED
+        if on then
+            bs.status.Text = "Boss: menunggu notifikasi"
+        else
+            bs.status.Text = "Boss: mati"
+        end
+    end
+    bs.btn.Activated:Connect(function() setBoss(not bs.on) end)
+
+    local MODE_NAMES = { "SINYAL+SENTUH", "SENTUH saja", "SINYAL saja" }
+    setClickMode = function(m)
+        m = tonumber(m) or 1
+        if m < 1 or m > #MODE_NAMES then m = 1 end
+        bs.mode = m
+        bs.modeBtn.Text = "Metode klik: " .. MODE_NAMES[m]
+    end
+    bs.modeBtn.Activated:Connect(function() setClickMode(bs.mode % #MODE_NAMES + 1) end)
+    setClickMode(1)
+
+    bs.setZone.Activated:Connect(function()
+        local hrp = getHRP()
+        if not hrp then return end
+        bs.pos = hrp.Position
+        status.Text = "Zona boss disimpan. Save Config!"
+        refresh()
+    end)
+
+    bs.testGo.Activated:Connect(function()
+        local b = findNotice()
+        if not b then
+            status.Text = "Tes GO: notifikasi boss tidak terlihat"
+            return
+        end
+        flash(b)
+        clickGui(b)
+        status.Text = "Tes GO: ditekan (kotak merah = tombol yang ditemukan)"
+    end)
+
+    bs.testHome.Activated:Connect(function()
+        local b = findHomeBtn()
+        if not b then
+            status.Text = "Tes Rumah: tombol rumah tidak ditemukan"
+            return
+        end
+        flash(b)
+        clickGui(b)
+        status.Text = "Tes Rumah: ditekan (kotak merah = tombol yang ditemukan)"
+    end)
+
+    bs.testFire.Activated:Connect(function()
+        local b = findFire()
+        if not b then
+            status.Text = "Tes FIRE: tombol FIRE tidak terlihat"
+            return
+        end
+        flash(b)
+        clickGui(b)
+        status.Text = "Tes FIRE: ditekan (kotak merah = tombol yang ditemukan)"
+    end)
+
+    -- Scan semua tombol & teks yang sedang terlihat, hasil ke kotak log (tab Log)
+    bs.scanGui.Activated:Connect(function()
+        logLine("== Scan GUI tampil ==")
+        local n = 0
+        for _, o in ipairs(pg:GetDescendants()) do
+            if n >= 50 then break end
+            if not o:IsDescendantOf(gui) and (o:IsA("GuiButton") or o:IsA("TextLabel"))
+                and o.AbsoluteSize.X > 1 and visibleDeep(o) then
+                local txt = ""
+                if o:IsA("TextLabel") or o:IsA("TextButton") then txt = o.Text end
+                if o:IsA("GuiButton") or txt ~= "" then
+                    n += 1
+                    local path = (o:GetFullName():gsub("^.-PlayerGui%.", ""))
+                    txt = (txt:gsub("\n", " "))
+                    logLine(string.format("[gui] %s | %s | %s", path, txt, o.ClassName))
+                end
+            end
+        end
+        logLine("== selesai (" .. n .. " item): tekan Salin Log ==")
     end)
 end
 
@@ -1640,6 +2245,17 @@ local fieldMap = {
     hold = holdBox,
     guardKey = guardKeyBox,
     catchKey = catchKeyBox,
+    bossKey = bs.keyBox,
+    bossFilter = bs.filterBox,
+    bossGo = bs.goBox,
+    bossAfterGo = bs.afterGoBox,
+    bossName = bs.nameBox,
+    bossRange = bs.rangeBox,
+    bossFire = bs.fireBox,
+    bossFightMax = bs.fightMaxBox,
+    bossTp = bs.tpBox,
+    bossHome = bs.homeNameBox,
+    bossClickY = bs.clickYBox,
 }
 
 local function cfgPath(name) return FOLDER .. "/" .. name .. ".json" end
@@ -1670,9 +2286,12 @@ local function collectConfig()
     c.toggles.skipGuard = skipGuardOn
     c.toggles.skipCatch = skipCatchOn
     c.toggles.train = trainOn
+    c.toggles.boss = bs.on
+    c.clickMode = bs.mode
     if frontPos then c.front = v3t(frontPos) end
     if tr.pos then c.trainPos = v3t(tr.pos) end
     if tr.rel then c.trainRel = v3t(tr.rel) end
+    if bs.pos then c.bossPos = v3t(bs.pos) end
     for _, z in ipairs(zones) do
         local t = v3t(z.pos)
         t.name = z.name
@@ -1699,10 +2318,13 @@ local function applyConfig(c)
         if c.toggles.skipGuard ~= nil then setSkipGuard(c.toggles.skipGuard == true) end
         if c.toggles.skipCatch ~= nil then setSkipCatch(c.toggles.skipCatch == true) end
         if c.toggles.train ~= nil then setTrain(c.toggles.train == true) end
+        if c.toggles.boss ~= nil then setBoss(c.toggles.boss == true) end
     end
+    if type(c.clickMode) == "number" then setClickMode(c.clickMode) end
     frontPos = t3v(c.front)
     tr.pos = t3v(c.trainPos)
     tr.rel = t3v(c.trainRel)
+    bs.pos = t3v(c.bossPos)
     clearZones()
     if type(c.zones) == "table" then
         for i, zd in ipairs(c.zones) do
@@ -2038,13 +2660,14 @@ end
 local minimized = false
 minBtn.Activated:Connect(function()
     minimized = not minimized
-    body.Visible = not minimized
+    content.Visible = not minimized
     main.Size = UDim2.new(0, 260, 0, minimized and 32 or FULL_H)
     minBtn.Text = minimized and "+" or "-"
 end)
 
 local function close()
     alive, running, trainOn = false, false, false
+    bs.on = false
     runId += 1
     local c = lp.Character
     local hum = c and c:FindFirstChildOfClass("Humanoid")
