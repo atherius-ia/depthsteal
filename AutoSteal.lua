@@ -40,6 +40,7 @@ local afkOn, afkCount = true, 0
 local skipGuardOn, skipCatchOn, logOn = false, false, false
 local cineCount = 0 -- bertambah tiap GUI "tunggu setelah steal" muncul
 local nf = { on = false } -- elemen & status notifikasi Discord
+local tr = {} -- elemen & posisi training
 local startClock = os.clock()
 local frontPos
 local zones, selected, zoneCounter = {}, nil, 0
@@ -238,6 +239,10 @@ trainStatus.TextXAlignment = Enum.TextXAlignment.Left
 trainStatus.Text = "Boost terkirim: 0"
 trainStatus.Parent = trainRow
 
+tr.posBtn = mkBtn(mkRow(32), "Set Posisi Training", COL_BLUE)
+tr.posBtn.Size = UDim2.new(1, 0, 1, 0)
+tr.promptBox = mkField("Teks prompt training (opsional)", "")
+
 -- ===== Menu ANTI AFK =====
 mkHeader("ANTI AFK")
 
@@ -386,8 +391,8 @@ local function refresh()
     for i, z in ipairs(zones) do
         z.btn.BackgroundColor3 = (i == selected) and COL_BLUE or COL_GREY
     end
-    info.Text = string.format("Zona: %d | Depan: %s",
-        #zones, frontPos and "OK" or "-")
+    info.Text = string.format("Zona: %d | Depan: %s | Latih: %s",
+        #zones, frontPos and "OK" or "-", tr.pos and "OK" or "-")
 end
 refresh()
 
@@ -752,7 +757,10 @@ task.spawn(function()
                     local okf = pcall(function()
                         boostRemote:FireServer({ window = window })
                     end)
-                    if okf then trainCount += 1 end
+                    if okf then
+                        trainCount += 1
+                        if logOn then logLine("[boost] window=" .. tostring(window)) end
+                    end
                 end
             else
                 trainLast = nil
@@ -768,15 +776,17 @@ task.spawn(function()
     end
 end)
 
-trainBtn.Activated:Connect(function()
-    trainOn = not trainOn
+local function setTrain(on)
+    trainOn = on
     trainLast = nil
-    trainBtn.Text = "Auto Training: " .. (trainOn and "ON" or "OFF")
-    trainBtn.BackgroundColor3 = trainOn and COL_GREEN or COL_RED
-    if not trainOn then
+    trainBtn.Text = "Auto Training: " .. (on and "ON" or "OFF")
+    trainBtn.BackgroundColor3 = on and COL_GREEN or COL_RED
+    if not on then
         trainStatus.Text = "Boost terkirim: " .. trainCount
     end
-end)
+end
+
+trainBtn.Activated:Connect(function() setTrain(not trainOn) end)
 
 -- ===== Stabilizer =====
 table.insert(conns, RunService.Stepped:Connect(function()
@@ -1081,6 +1091,125 @@ local function doSteals(z, radius, speed, id)
     return got
 end
 
+-- ===== Auto masuk Training =====
+-- Jalan ke posisi training yang disimpan; kalau training belum mulai sendiri,
+-- tekan prompt terdekat di sekitar posisi itu. Hanya aktif saat Auto Steal tidak berjalan.
+do
+    local function inTraining()
+        return attr("State") == "Training"
+    end
+
+    local function trainWalk(target, speed, stopDist)
+        local t0 = os.clock()
+        while alive and trainOn and not running do
+            local hrp = getHRP()
+            if not hrp then return false end
+            local delta = target - hrp.Position
+            local dist = delta.Magnitude
+            if dist <= stopDist + 0.05 then return true end
+            local dt = RunService.Heartbeat:Wait()
+            local step = math.min(dist - stopDist, speed * dt)
+            local newPos = hrp.Position + delta.Unit * step
+            local flat = Vector3.new(delta.X, 0, delta.Z)
+            if flat.Magnitude > 0.01 then
+                hrp.CFrame = CFrame.lookAt(newPos, newPos + flat)
+            else
+                hrp.CFrame = CFrame.new(newPos) * (hrp.CFrame - hrp.CFrame.Position)
+            end
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+            if os.clock() - t0 > 60 then return false end
+        end
+        return false
+    end
+
+    local function waitTraining(maxT)
+        local t0 = os.clock()
+        while alive and trainOn and not running and os.clock() - t0 < maxT do
+            if inTraining() then return true end
+            task.wait(0.2)
+        end
+        return inTraining()
+    end
+
+    local function findTrainPrompt(pos)
+        local key = tostring(tr.promptBox.Text):lower():match("^%s*(.-)%s*$")
+        local best, bd
+        for _, p in ipairs(workspace:GetDescendants()) do
+            if p:IsA("ProximityPrompt") and p.Enabled then
+                local pp = promptPos(p)
+                if pp then
+                    local d = (pp - pos).Magnitude
+                    if d <= 15 and (key == "" or promptText(p):find(key, 1, true))
+                        and (not best or d < bd) then
+                        best, bd = p, d
+                    end
+                end
+            end
+        end
+        return best
+    end
+
+    local function pressPrompt(p)
+        pcall(function() p.RequiresLineOfSight = false end)
+        if fireproximityprompt and pcall(fireproximityprompt, p) then return end
+        pcall(function()
+            p:InputHoldBegin()
+            task.wait((p.HoldDuration or 0) + 0.2)
+            p:InputHoldEnd()
+        end)
+    end
+
+    tr.posBtn.Activated:Connect(function()
+        local hrp = getHRP()
+        if not hrp then return end
+        tr.pos = hrp.Position
+        refresh()
+        status.Text = "Posisi training disimpan (jangan lupa Save Config)"
+    end)
+
+    task.spawn(function()
+        local lastTry = os.clock() - 9 -- percobaan pertama sekitar 3 dtk setelah script jalan
+        while alive do
+            local st = attr("State")
+            if trainOn and tr.pos and not running and getHRP()
+                and st ~= nil and st ~= "Training" and os.clock() - lastTry >= 12 then
+                lastTry = os.clock()
+                local speed = clamp(tonumber(speedBox.Text) or 60, 5, 500)
+                status.Text = "Training: menuju posisi training"
+                if trainWalk(tr.pos, speed, 2) then
+                    status.Text = "Training: menunggu mulai"
+                    if not waitTraining(4) and alive and trainOn and not running then
+                        local p = findTrainPrompt(tr.pos)
+                        if p then
+                            status.Text = "Training: menekan " .. tostring(p.ObjectText)
+                            pressPrompt(p)
+                            waitTraining(5)
+                        end
+                    end
+                    if inTraining() then status.Text = "Training dimulai" end
+                end
+            end
+            task.wait(0.5)
+        end
+    end)
+
+    -- Log perubahan atribut pemain (untuk melihat nama/nilai State yang dipakai game)
+    table.insert(conns, lp.AttributeChanged:Connect(function(name)
+        if logOn and name ~= "RowBoostWindow" then
+            logLine("[attr] " .. name .. " = " .. tostring(lp:GetAttribute(name)))
+        end
+    end))
+    logBtn.Activated:Connect(function()
+        task.delay(0.1, function()
+            if logOn then
+                logLine("[state] State=" .. tostring(attr("State")) .. " | remote boost="
+                    .. tostring(boostRemote ~= nil))
+            end
+        end)
+    end)
+end
+
 -- ===== Satu siklus =====
 local function cycle(id)
     local speed = clamp(tonumber(speedBox.Text) or 60, 5, 500)
@@ -1273,6 +1402,7 @@ local fieldMap = {
     syncWait = syncWaitBox,
     afterSteal = afterStealBox,
     cineKey = cineKeyBox,
+    trainPrompt = tr.promptBox,
     cineTimeout = cineTimeoutBox,
     waitFront = frontBox,
     radius = radiusBox,
@@ -1313,7 +1443,9 @@ local function collectConfig()
     c.toggles.afk = afkOn
     c.toggles.skipGuard = skipGuardOn
     c.toggles.skipCatch = skipCatchOn
+    c.toggles.train = trainOn
     if frontPos then c.front = v3t(frontPos) end
+    if tr.pos then c.trainPos = v3t(tr.pos) end
     for _, z in ipairs(zones) do
         local t = v3t(z.pos)
         t.name = z.name
@@ -1339,8 +1471,10 @@ local function applyConfig(c)
         if c.toggles.afk ~= nil then setAfk(c.toggles.afk == true) end
         if c.toggles.skipGuard ~= nil then setSkipGuard(c.toggles.skipGuard == true) end
         if c.toggles.skipCatch ~= nil then setSkipCatch(c.toggles.skipCatch == true) end
+        if c.toggles.train ~= nil then setTrain(c.toggles.train == true) end
     end
     frontPos = t3v(c.front)
+    tr.pos = t3v(c.trainPos)
     clearZones()
     if type(c.zones) == "table" then
         for i, zd in ipairs(c.zones) do
