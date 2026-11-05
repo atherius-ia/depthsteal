@@ -470,6 +470,12 @@ bs.dropSizeBox = mkField("Ukuran yang di-drop", "small")
 bs.dropTextBox = mkField("Teks tombol DROP", "drop")
 bs.dropSureBox = mkField("Teks tombol konfirmasi", "sure")
 
+mkHeader("INVENTORI PENUH")
+bs.invBtn = mkBtn(mkRow(32), "Respawn bila inventori penuh: ON", COL_GREEN)
+bs.invBtn.Size = UDim2.new(1, 0, 1, 0)
+bs.invTextBox = mkField("Teks notifikasi penuh", "inventory full")
+bs.respawnTextBox = mkField("Teks tombol respawn (opsional)", "respawn")
+
 -- ===== Tab LOG =====
 newTab("Log")
 mkHeader("LOG & ALAT BANTU")
@@ -1340,6 +1346,7 @@ do
         ch:WaitForChild("HumanoidRootPart", 10)
         task.wait(1)
         captureRef("respawn")
+        tr.retryNow = true -- training langsung dicoba setelah respawn
     end))
 
     -- Cari objek bernama (substring) terdekat dari posisi karakter
@@ -1403,6 +1410,21 @@ do
     end
 
     -- Daftar target: kursi -> nama objek -> relatif ke spawn -> posisi absolut
+    -- Mesin dayung milik sendiri: nomor mesin = BaseIndex pada base yang OwnerUserId-nya akun ini
+    tr.ownSeatKey = function()
+        local map = workspace:FindFirstChild("Map")
+        local bases = map and map:FindFirstChild("Bases")
+        if not bases then return nil end
+        for _, b in ipairs(bases:GetChildren()) do
+            local owner = b:GetAttribute("OwnerUserId")
+            local idx = b:GetAttribute("BaseIndex")
+            if owner ~= nil and idx ~= nil and tostring(owner) == tostring(lp.UserId) then
+                return ".rowingmachine" .. tostring(idx) .. "."
+            end
+        end
+        return nil
+    end
+
     local function targets()
         local list = {}
         local hrp = getHRP()
@@ -1410,7 +1432,12 @@ do
         local from = hrp.Position
         local skey = tostring(tr.seatBox.Text):match("^%s*(.-)%s*$")
         if skey ~= "" then
-            local seat = findFreeSeat(skey)
+            local seat
+            if skey:lower() == "rowingmachines" then
+                local own = tr.ownSeatKey()
+                if own then seat = findFreeSeat(own) end
+            end
+            seat = seat or findFreeSeat(skey)
             if seat then
                 list[#list + 1] = { label = "kursi", pos = seat.Position + Vector3.new(0, 3, 0), seat = seat }
             end
@@ -2057,7 +2084,8 @@ do
     -- terbaca sebelum animasi hilang. Kalau ukuran akhir ada di daftar "Ukuran yang di-drop",
     -- tombol DROP lalu SURE? ditekan berulang sampai tombolnya hilang.
     -- Label ukuran dicari lewat posisi: label huruf saja tepat di bawah label pengali (mis. "x1.38").
-    do
+    -- Dibungkus fungsi sendiri supaya tidak melewati batas 200 variabel lokal per fungsi (Luau).
+    ;(function()
         local dropOn, dropBusy = false, false
         local multCache
 
@@ -2266,7 +2294,57 @@ do
             bs.dropStatus.Text = on and "Drop: menunggu animasi ukuran" or "Drop: mati"
         end
         bs.dropBtn.Activated:Connect(function() bs.dropSet(not dropOn) end)
-    end
+    end)()
+
+    -- ===== Inventori penuh: Auto Steal dimatikan lalu respawn supaya cepat kembali =====
+    ;(function()
+        local invOn, lastTrig = true, -math.huge
+
+        local function respawnNow()
+            local ch = lp.Character
+            local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+            -- 1) tombol respawn milik game (kalau ada dan terlihat)
+            local rb = findByText(bs.respawnTextBox.Text, nil, false)
+            if rb then
+                clickGui(rb)
+                task.wait(1.2)
+            end
+            -- 2) matikan karakter supaya respawn
+            if lp.Character == ch and hum and hum.Health > 0 then
+                pcall(function() hum.Health = 0 end)
+                task.wait(1.5)
+            end
+            -- 3) cadangan kalau masih hidup
+            if lp.Character == ch and ch and ch.Parent then
+                pcall(function() ch:BreakJoints() end)
+            end
+        end
+
+        task.spawn(function()
+            while alive do
+                if invOn and running and os.clock() - lastTrig > 20 then
+                    local b, lbl = findByText(bs.invTextBox.Text, nil, false)
+                    if b and (not lbl or lbl.TextTransparency < 0.9) then
+                        lastTrig = os.clock()
+                        if bs.stopSteal then bs.stopSteal() end
+                        status.Text = "Inventori penuh: Auto Steal off, respawn"
+                        if logOn then logLine("[inventori] penuh, respawn") end
+                        respawnNow()
+                    end
+                end
+                task.wait(0.4)
+            end
+        end)
+
+        bs.invSet = function(on)
+            invOn = on
+            bs.invOn = on
+            bs.invBtn.Text = "Respawn bila inventori penuh: " .. (on and "ON" or "OFF")
+            bs.invBtn.BackgroundColor3 = on and COL_GREEN or COL_GREY
+        end
+        bs.invSet(true)
+        bs.invBtn.Activated:Connect(function() bs.invSet(not invOn) end)
+    end)()
 end
 
 -- ===== Satu siklus =====
@@ -2450,6 +2528,7 @@ local function setRunning(on)
 end
 
 toggle.Activated:Connect(function() setRunning(not running) end)
+bs.stopSteal = function() setRunning(false) end
 
 -- ===== CONFIG (save / load) =====
 local FOLDER = "AutoStealConfig"
@@ -2489,6 +2568,8 @@ local fieldMap = {
     dropSizes = bs.dropSizeBox,
     dropText = bs.dropTextBox,
     dropSure = bs.dropSureBox,
+    invText = bs.invTextBox,
+    respawnText = bs.respawnTextBox,
 }
 
 local function cfgPath(name) return FOLDER .. "/" .. name .. ".json" end
@@ -2521,6 +2602,7 @@ local function collectConfig()
     c.toggles.train = trainOn
     c.toggles.boss = bs.on
     c.toggles.drop = bs.dropOn == true
+    c.toggles.inv = bs.invOn == true
     c.clickMode = bs.mode
     if frontPos then c.front = v3t(frontPos) end
     if tr.pos then c.trainPos = v3t(tr.pos) end
@@ -2554,6 +2636,7 @@ local function applyConfig(c)
         if c.toggles.train ~= nil then setTrain(c.toggles.train == true) end
         if c.toggles.boss ~= nil then setBoss(c.toggles.boss == true) end
         if c.toggles.drop ~= nil and bs.dropSet then bs.dropSet(c.toggles.drop == true) end
+        if c.toggles.inv ~= nil and bs.invSet then bs.invSet(c.toggles.inv == true) end
     end
     if type(c.clickMode) == "number" then setClickMode(c.clickMode) end
     frontPos = t3v(c.front)
