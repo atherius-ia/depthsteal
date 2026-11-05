@@ -383,6 +383,9 @@ bs.status = mkInfoLabel(30, "Boss: mati")
 bs.tpBaseBtn = mkBtn(mkRow(34), "Teleport ke Base (respawn)", COL_BLUE)
 bs.tpBaseBtn.Size = UDim2.new(1, 0, 1, 0)
 
+bs.setSafe = mkBtn(mkRow(32), "Set Zona Aman (posisi saya)", COL_BLUE)
+bs.setSafe.Size = UDim2.new(1, 0, 1, 0)
+
 bs.setZone = mkBtn(mkRow(32), "Set Zona Boss (posisi saya)", COL_BLUE)
 bs.setZone.Size = UDim2.new(1, 0, 1, 0)
 
@@ -2289,10 +2292,43 @@ do
         -- Teleport ke base = respawn karakter (spawn game = base). Dipakai oleh
         -- inventori penuh, fallback Auto Boss, dan tombol manual.
         local tpBusy = false
+
+        -- Game me-respawn di posisi terakhir, jadi pindah dulu ke zona aman
+        local function goSafe()
+            local target = bs.safePos or tr.pos
+            if not target then
+                status.Text = "Zona Aman belum diset (tab Boss), respawn tanpa pindah"
+                if logOn then logLine("[base] zona aman belum diset") end
+                return false
+            end
+            local speed = clamp(tonumber(speedBox.Text) or 60, 5, 500)
+            local t0 = os.clock()
+            local ok = false
+            setStand(true)
+            while alive and os.clock() - t0 < 90 do
+                local hrp = getHRP()
+                if not hrp then break end
+                local delta = target - hrp.Position
+                local dist = delta.Magnitude
+                if dist <= 2 then ok = true break end
+                local dt = RunService.Heartbeat:Wait()
+                local newPos = hrp.Position + delta.Unit * math.min(dist, speed * dt)
+                hrp.CFrame = CFrame.new(newPos) * (hrp.CFrame - hrp.CFrame.Position)
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.AssemblyAngularVelocity = Vector3.zero
+            end
+            setStand(false)
+            if ok then task.wait(1.2) end -- beri waktu server mencatat posisi
+            return ok
+        end
+
         bs.tpBase = function()
             if tpBusy then return false end
             tpBusy = true
             local ch = lp.Character
+            status.Text = "Pindah ke zona aman..."
+            pcall(goSafe)
+            status.Text = "Respawn..."
             pcall(respawnNow)
             local t0 = os.clock()
             while alive and lp.Character == ch and os.clock() - t0 < 10 do task.wait(0.2) end
@@ -2339,6 +2375,20 @@ do
                 status.Text = ok and "Sudah respawn di base" or "Respawn gagal / sedang berjalan"
             end)
         end
+        local function showSafe()
+            local v = bs.safePos
+            bs.setSafe.Text = v and string.format("Zona Aman: %.0f, %.0f, %.0f (ketuk = ganti)", v.X, v.Y, v.Z)
+                or "Set Zona Aman (posisi saya)"
+        end
+        bs.showSafe = showSafe
+        bs.setSafe.Activated:Connect(function()
+            local hrp = getHRP()
+            if not hrp then return end
+            bs.safePos = hrp.Position
+            showSafe()
+            status.Text = "Zona aman disimpan. Save Config!"
+        end)
+        showSafe()
         bs.tpBaseBtn.Activated:Connect(manualTp)
         bs.tpBaseBtn2.Activated:Connect(manualTp)
 
@@ -2607,6 +2657,7 @@ local function collectConfig()
     if tr.pos then c.trainPos = v3t(tr.pos) end
     if tr.rel then c.trainRel = v3t(tr.rel) end
     if bs.pos then c.bossPos = v3t(bs.pos) end
+    if bs.safePos then c.safePos = v3t(bs.safePos) end
     for _, z in ipairs(zones) do
         local t = v3t(z.pos)
         t.name = z.name
@@ -2643,6 +2694,8 @@ local function applyConfig(c)
     tr.pos = t3v(c.trainPos)
     tr.rel = t3v(c.trainRel)
     bs.pos = t3v(c.bossPos)
+    bs.safePos = t3v(c.safePos)
+    if bs.showSafe then bs.showSafe() end
     clearZones()
     if type(c.zones) == "table" then
         for i, zd in ipairs(c.zones) do
