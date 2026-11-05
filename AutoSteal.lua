@@ -383,7 +383,7 @@ bs.status = mkInfoLabel(30, "Boss: mati")
 bs.tpBaseBtn = mkBtn(mkRow(34), "Teleport ke Base (respawn)", COL_BLUE)
 bs.tpBaseBtn.Size = UDim2.new(1, 0, 1, 0)
 
-bs.setSafe = mkBtn(mkRow(32), "Set Zona Aman (posisi saya)", COL_BLUE)
+bs.setSafe = mkBtn(mkRow(32), "Set Zona Aman Boss (posisi saya)", COL_BLUE)
 bs.setSafe.Size = UDim2.new(1, 0, 1, 0)
 
 bs.setZone = mkBtn(mkRow(32), "Set Zona Boss (posisi saya)", COL_BLUE)
@@ -497,6 +497,11 @@ bs.dropSureBox = mkField("Teks tombol konfirmasi", "sure")
 mkHeader("INVENTORI PENUH")
 bs.invBtn = mkBtn(mkRow(32), "Respawn bila inventori penuh: ON", COL_GREEN)
 bs.invBtn.Size = UDim2.new(1, 0, 1, 0)
+bs.invTrainBtn = mkBtn(mkRow(32), "Training ON setelah inv penuh: ON", COL_GREEN)
+bs.invTrainBtn.Size = UDim2.new(1, 0, 1, 0)
+bs.invTrainOn = true
+bs.setSafe2 = mkBtn(mkRow(32), "Set Zona Aman Steal (posisi saya)", COL_BLUE)
+bs.setSafe2.Size = UDim2.new(1, 0, 1, 0)
 bs.tpBaseBtn2 = mkBtn(mkRow(34), "Teleport ke Base (respawn)", COL_BLUE)
 bs.tpBaseBtn2.Size = UDim2.new(1, 0, 1, 0)
 bs.invTextBox = mkField("Teks notifikasi penuh", "inventory full")
@@ -1989,7 +1994,7 @@ do
             if not went and bs.bossRespawnOn and bs.tpBase and alive and bs.on then
                 say("tombol rumah tidak ada, respawn ke base")
                 if logOn then logLine("[boss] tombol rumah gagal, respawn ke base") end
-                went = bs.tpBase()
+                went = bs.tpBase("boss")
             end
             if went then
                 say("selesai, kembali ke training")
@@ -2423,11 +2428,13 @@ do
         local tpBusy = false
 
         -- Game me-respawn di posisi terakhir, jadi pindah dulu ke zona aman
-        local function goSafe()
-            local target = bs.safePos or tr.pos
+        local function goSafe(kind)
+            local target
+            if kind == "boss" then target = bs.safePos else target = bs.safePosSteal end
+            target = target or tr.pos
             if not target then
-                status.Text = "Zona Aman belum diset (tab Boss), respawn tanpa pindah"
-                if logOn then logLine("[base] zona aman belum diset") end
+                status.Text = "Zona Aman " .. (kind == "boss" and "Boss" or "Steal") .. " belum diset, respawn tanpa pindah"
+                if logOn then logLine("[base] zona aman " .. tostring(kind) .. " belum diset") end
                 return false
             end
             local speed = clamp(tonumber(speedBox.Text) or 60, 5, 500)
@@ -2451,12 +2458,12 @@ do
             return ok
         end
 
-        bs.tpBase = function()
+        bs.tpBase = function(kind)
             if tpBusy then return false end
             tpBusy = true
             local ch = lp.Character
             status.Text = "Pindah ke zona aman..."
-            pcall(goSafe)
+            pcall(goSafe, kind)
             status.Text = "Respawn..."
             pcall(respawnNow)
             local t0 = os.clock()
@@ -2479,7 +2486,13 @@ do
                         if bs.stopSteal then bs.stopSteal() end
                         status.Text = "Inventori penuh: Auto Steal off, respawn"
                         if logOn then logLine("[inventori] penuh, respawn") end
-                        bs.tpBase()
+                        local okTp = bs.tpBase("steal")
+                        if okTp and bs.invTrainOn then
+                            setTrain(true)
+                            tr.retryNow = true
+                            status.Text = "Inventori penuh: sudah di base, Auto Training ON"
+                            if logOn then logLine("[inventori] respawn selesai, training ON") end
+                        end
                     end
                 end
                 task.wait(0.4)
@@ -2495,19 +2508,21 @@ do
         bs.invSet(true)
         bs.invBtn.Activated:Connect(function() bs.invSet(not invOn) end)
 
-        local function manualTp()
+        local function manualTp(kind)
             if bs.stopSteal then bs.stopSteal() end
             status.Text = "Teleport ke base (respawn)..."
             if logOn then logLine("[base] teleport manual (respawn)") end
             task.spawn(function()
-                local ok = bs.tpBase()
+                local ok = bs.tpBase(kind)
                 status.Text = ok and "Sudah respawn di base" or "Respawn gagal / sedang berjalan"
             end)
         end
         local function showSafe()
-            local v = bs.safePos
-            bs.setSafe.Text = v and string.format("Zona Aman: %.0f, %.0f, %.0f (ketuk = ganti)", v.X, v.Y, v.Z)
-                or "Set Zona Aman (posisi saya)"
+            local v, w = bs.safePos, bs.safePosSteal
+            bs.setSafe.Text = v and string.format("Zona Aman Boss: %.0f, %.0f, %.0f (ketuk = ganti)", v.X, v.Y, v.Z)
+                or "Set Zona Aman Boss (posisi saya)"
+            bs.setSafe2.Text = w and string.format("Zona Aman Steal: %.0f, %.0f, %.0f (ketuk = ganti)", w.X, w.Y, w.Z)
+                or "Set Zona Aman Steal (posisi saya)"
         end
         bs.showSafe = showSafe
         bs.setSafe.Activated:Connect(function()
@@ -2515,11 +2530,18 @@ do
             if not hrp then return end
             bs.safePos = hrp.Position
             showSafe()
-            status.Text = "Zona aman disimpan. Save Config!"
+            status.Text = "Zona aman Boss disimpan. Save Config!"
+        end)
+        bs.setSafe2.Activated:Connect(function()
+            local hrp = getHRP()
+            if not hrp then return end
+            bs.safePosSteal = hrp.Position
+            showSafe()
+            status.Text = "Zona aman Steal disimpan. Save Config!"
         end)
         showSafe()
-        bs.tpBaseBtn.Activated:Connect(manualTp)
-        bs.tpBaseBtn2.Activated:Connect(manualTp)
+        bs.tpBaseBtn.Activated:Connect(function() manualTp("boss") end)
+        bs.tpBaseBtn2.Activated:Connect(function() manualTp("steal") end)
 
         bs.bossRespawnSet = function(on)
             bs.bossRespawnOn = on
@@ -2527,6 +2549,13 @@ do
             bs.bossRespawnBtn.BackgroundColor3 = on and COL_GREEN or COL_GREY
         end
         bs.bossRespawnBtn.Activated:Connect(function() bs.bossRespawnSet(not bs.bossRespawnOn) end)
+
+        bs.invTrainSet = function(on)
+            bs.invTrainOn = on
+            bs.invTrainBtn.Text = "Training ON setelah inv penuh: " .. (on and "ON" or "OFF")
+            bs.invTrainBtn.BackgroundColor3 = on and COL_GREEN or COL_GREY
+        end
+        bs.invTrainBtn.Activated:Connect(function() bs.invTrainSet(not bs.invTrainOn) end)
     end)()
 end
 
@@ -2781,12 +2810,14 @@ local function collectConfig()
     c.toggles.drop = bs.dropOn == true
     c.toggles.inv = bs.invOn == true
     c.toggles.bossRespawn = bs.bossRespawnOn == true
+    c.toggles.invTrain = bs.invTrainOn == true
     c.clickMode = bs.mode
     if frontPos then c.front = v3t(frontPos) end
     if tr.pos then c.trainPos = v3t(tr.pos) end
     if tr.rel then c.trainRel = v3t(tr.rel) end
     if bs.pos then c.bossPos = v3t(bs.pos) end
     if bs.safePos then c.safePos = v3t(bs.safePos) end
+    if bs.safePosSteal then c.safePosSteal = v3t(bs.safePosSteal) end
     for _, z in ipairs(zones) do
         local t = v3t(z.pos)
         t.name = z.name
@@ -2817,6 +2848,7 @@ local function applyConfig(c)
         if c.toggles.drop ~= nil and bs.dropSet then bs.dropSet(c.toggles.drop == true) end
         if c.toggles.inv ~= nil and bs.invSet then bs.invSet(c.toggles.inv == true) end
         if c.toggles.bossRespawn ~= nil and bs.bossRespawnSet then bs.bossRespawnSet(c.toggles.bossRespawn == true) end
+        if c.toggles.invTrain ~= nil and bs.invTrainSet then bs.invTrainSet(c.toggles.invTrain == true) end
     end
     if type(c.clickMode) == "number" then setClickMode(c.clickMode) end
     frontPos = t3v(c.front)
@@ -2824,6 +2856,7 @@ local function applyConfig(c)
     tr.rel = t3v(c.trainRel)
     bs.pos = t3v(c.bossPos)
     bs.safePos = t3v(c.safePos)
+    bs.safePosSteal = t3v(c.safePosSteal)
     if bs.showSafe then bs.showSafe() end
     clearZones()
     if type(c.zones) == "table" then
