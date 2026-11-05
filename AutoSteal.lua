@@ -38,12 +38,12 @@ local stabOn, onlyList = true, false
 local keepY, syncY, baseY = true, true, nil
 local afkOn, afkCount = true, 0
 local skipGuardOn, skipCatchOn, logOn = false, false, false
-local cineCount = 0 -- bertambah tiap GUI "tunggu setelah steal" muncul
-local nf = { on = false } -- elemen & status notifikasi Discord
-local tr = {} -- elemen & posisi training
-local bs = { on = false, mode = 1 } -- elemen & status auto boss
-local bossBusy = false -- true selama rutinitas boss berjalan (training berhenti sementara)
-local setBoss, setClickMode -- diisi di modul Auto Boss
+local cineCount = 0
+local nf = { on = false }
+local tr = {}
+local bs = { on = false, mode = 1 }
+local bossBusy = false
+local setBoss, setClickMode
 local startClock = os.clock()
 local frontPos
 local zones, selected, zoneCounter = {}, nil, 0
@@ -651,7 +651,7 @@ do
 
     task.spawn(function()
         while alive do
-            task.wait(300) -- Kirim tap tiap 5 menit
+            task.wait(300)
             if afkOn then
                 sendVirtualTap()
                 if logOn then
@@ -1213,7 +1213,7 @@ local function takeEgg(p, speed, id)
         if not moveTo(ppos, speed, stop, id) then return false end
         if not pause(0.4, id) then return false end
         if holdPrompt(p, id) then return true end
-        if not alivePath(id) then return false end
+        if not alivePath(id) then false end
         if not pause(0.4, id) then return false end
         if not promptAlive(p) then return true end
     end
@@ -1936,7 +1936,7 @@ do
             for attempt = 1, 4 do
                 if not (alive and bs.on) then return end
                 local home = findHomeBtn()
-                if home then
+                if home me then
                     clickGui(home, attempt > 1 and 1 or nil)
                     local t0 = os.clock()
                     while os.clock() - t0 < 4 and alive and bs.on do
@@ -2058,7 +2058,7 @@ do
         logLine("== selesai (" .. n .. " item): tekan Salin Log ==")
     end)
 
-    -- ===== Auto Drop telur ukuran kecil (Fixed Camera & Clean Code) =====
+    -- ===== Auto Drop telur ukuran kecil (Fixed Auto Tap Reset Viewport) =====
     ;(function()
         local dropOn, dropBusy = false, false
         local multCache
@@ -2149,6 +2149,21 @@ do
             end)
         end
 
+        -- Auto Tap layar kosong (reset UI mode penutup animasi)
+        local function resetViewportFocus()
+            if not VIM then return end
+            pcall(function()
+                local cam = workspace.CurrentCamera
+                local vp = cam and cam.ViewportSize or Vector2.new(800, 600)
+                -- Ketuk area kosong aman di kanan tengah
+                local rx = vp.X * 0.8
+                local ry = vp.Y * 0.5
+                VIM:SendMouseButtonEvent(rx, ry, 0, true, game, 0)
+                task.wait(0.05)
+                VIM:SendMouseButtonEvent(rx, ry, 0, false, game, 0)
+            end)
+        end
+
         local function doDrop()
             local clicks, t0 = 0, os.clock()
             local lastFound = t0
@@ -2173,6 +2188,13 @@ do
                     task.wait(0.15)
                 end
             end
+
+            -- Eksekusi 1x tap otomatis di layar kosong untuk mereset tampilan zoom UI ke mode normal (Gambar 2)
+            if clicks > 0 then
+                task.wait(0.2)
+                resetViewportFocus()
+            end
+
             return clicks
         end
 
@@ -2597,7 +2619,7 @@ local function loadMeta()
     if not hasFS then return end
     pcall(function()
         if isfile(metaPath) then
-            local m = HttpService:JSONDecode(readfile(metaPath))
+            local m = HttpService:JSONEncode(readfile(metaPath))
             if type(m) == "table" then
                 meta.autoload = (m.autoload == true)
                 meta.last = cleanName(m.last)
