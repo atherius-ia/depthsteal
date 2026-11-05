@@ -242,6 +242,9 @@ trainStatus.Parent = trainRow
 tr.posBtn = mkBtn(mkRow(32), "Set Posisi Training", COL_BLUE)
 tr.posBtn.Size = UDim2.new(1, 0, 1, 0)
 tr.promptBox = mkField("Teks prompt training (opsional)", "")
+tr.nameBox = mkField("Nama objek training (opsional)", "")
+tr.scanBtn = mkBtn(mkRow(32), "Scan Area Training (ke log)", COL_GREY)
+tr.scanBtn.Size = UDim2.new(1, 0, 1, 0)
 
 -- ===== Menu ANTI AFK =====
 mkHeader("ANTI AFK")
@@ -392,7 +395,7 @@ local function refresh()
         z.btn.BackgroundColor3 = (i == selected) and COL_BLUE or COL_GREY
     end
     info.Text = string.format("Zona: %d | Depan: %s | Latih: %s",
-        #zones, frontPos and "OK" or "-", tr.pos and "OK" or "-")
+        #zones, frontPos and "OK" or "-", (tr.pos or tr.rel) and "OK" or "-")
 end
 refresh()
 
@@ -1172,34 +1175,186 @@ do
         end)
     end
 
+    -- Referensi spawn: posisi karakter saat baru muncul di server (dipakai untuk posisi relatif)
+    local function captureRef(why)
+        local hrp = getHRP()
+        if hrp and attr("State") ~= "Training" then
+            tr.ref = hrp.CFrame
+            if logOn then logLine("[ref] referensi spawn diambil (" .. why .. ")") end
+        end
+    end
+
+    task.spawn(function()
+        local t0 = os.clock()
+        while alive and not getHRP() and os.clock() - t0 < 15 do task.wait(0.2) end
+        task.wait(0.5)
+        captureRef("awal")
+    end)
+
+    table.insert(conns, lp.CharacterAdded:Connect(function(ch)
+        ch:WaitForChild("HumanoidRootPart", 10)
+        task.wait(1)
+        captureRef("respawn")
+    end))
+
+    -- Cari objek bernama (substring) terdekat dari posisi karakter
+    local function findByName(key, from)
+        key = key:lower()
+        local bestPos, bd
+        for _, d in ipairs(workspace:GetDescendants()) do
+            local pos
+            if d:IsA("BasePart") and d.Name:lower():find(key, 1, true) then
+                pos = d.Position + Vector3.new(0, d.Size.Y / 2 + 3, 0)
+            elseif d:IsA("Model") and d.Name:lower():find(key, 1, true) then
+                pos = d:GetPivot().Position + Vector3.new(0, 3, 0)
+            end
+            if pos then
+                local dist = (pos - from).Magnitude
+                if not bestPos or dist < bd then bestPos, bd = pos, dist end
+            end
+        end
+        return bestPos
+    end
+
+    -- Daftar target: nama objek -> relatif ke spawn -> posisi absolut
+    local function targets()
+        local list = {}
+        local hrp = getHRP()
+        if not hrp then return list end
+        local from = hrp.Position
+        local key = tostring(tr.nameBox.Text):match("^%s*(.-)%s*$")
+        if key ~= "" then
+            local pos = findByName(key, from)
+            if pos then list[#list + 1] = { label = "nama", pos = pos } end
+        end
+        if tr.rel and tr.ref then
+            list[#list + 1] = { label = "relatif", pos = tr.ref:PointToWorldSpace(tr.rel) }
+        end
+        if tr.pos then
+            list[#list + 1] = { label = "absolut", pos = tr.pos }
+        end
+        -- buang target yang terlalu jauh (kemungkinan posisi dari server lain)
+        local out = {}
+        for _, t in ipairs(list) do
+            if (t.pos - from).Magnitude <= 1500 then out[#out + 1] = t end
+        end
+        return out
+    end
+
     tr.posBtn.Activated:Connect(function()
         local hrp = getHRP()
         if not hrp then return end
         tr.pos = hrp.Position
+        if tr.ref then
+            tr.rel = tr.ref:PointToObjectSpace(hrp.Position)
+            status.Text = "Posisi training disimpan (absolut + relatif ke spawn). Save Config!"
+        else
+            tr.rel = nil
+            status.Text = "Disimpan absolut saja (referensi spawn belum ada). Save Config!"
+        end
         refresh()
-        status.Text = "Posisi training disimpan (jangan lupa Save Config)"
     end)
 
+    -- Scan area di bawah/sekitar karakter, hasilnya ke kotak log (pakai Salin Log)
+    tr.scanBtn.Activated:Connect(function()
+        local hrp = getHRP()
+        if not hrp then return end
+        logLine("== Scan area training ==")
+        logLine(string.format("pos=%.0f,%.0f,%.0f State=%s", hrp.Position.X, hrp.Position.Y,
+            hrp.Position.Z, tostring(attr("State"))))
+        logLine("[ref] " .. (tr.ref and "ada" or "belum ada") .. " | rel=" .. tostring(tr.rel))
+
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = { lp.Character }
+        local hit = workspace:Raycast(hrp.Position, Vector3.new(0, -20, 0), params)
+        if hit and hit.Instance then
+            logLine("[bawah] " .. hit.Instance:GetFullName() .. " (" .. hit.Instance.ClassName .. ")")
+            local a = hit.Instance.Parent
+            local n = 0
+            while a and a ~= workspace and n < 6 do
+                local attrs = {}
+                for k, v in pairs(a:GetAttributes()) do attrs[#attrs + 1] = k .. "=" .. tostring(v) end
+                for _, c in ipairs(a:GetChildren()) do
+                    if c:IsA("ValueBase") then attrs[#attrs + 1] = c.Name .. "=" .. tostring(c.Value) end
+                end
+                local extra = ""
+                if #attrs > 0 then
+                    extra = " {" .. table.concat(attrs, ", ", 1, math.min(#attrs, 6)) .. "}"
+                end
+                logLine("[induk] " .. a.Name .. " (" .. a.ClassName .. ")" .. extra)
+                a = a.Parent
+                n += 1
+            end
+        else
+            logLine("[bawah] tidak ada objek di bawah karakter")
+        end
+
+        local rl = lp.RespawnLocation
+        logLine("[spawn] RespawnLocation=" .. (rl and rl:GetFullName() or "nil"))
+
+        local shown, spawns, nearestSpawn, sd = 0, 0, nil, nil
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if d:IsA("ProximityPrompt") then
+                local pp = promptPos(d)
+                if pp and (pp - hrp.Position).Magnitude <= 25 and shown < 6 then
+                    shown += 1
+                    logLine("[prompt] " .. d:GetFullName() .. " | " .. d.ActionText .. "/" .. d.ObjectText)
+                end
+            elseif d:IsA("Seat") or d:IsA("VehicleSeat") then
+                if (d.Position - hrp.Position).Magnitude <= 25 and shown < 6 then
+                    shown += 1
+                    logLine("[seat] " .. d:GetFullName())
+                end
+            elseif d:IsA("SpawnLocation") then
+                spawns += 1
+                local dd = (d.Position - hrp.Position).Magnitude
+                if not nearestSpawn or dd < sd then nearestSpawn, sd = d, dd end
+            end
+        end
+        logLine("[spawn] jumlah SpawnLocation=" .. spawns)
+        if nearestSpawn then
+            logLine(string.format("[spawn] terdekat: %s (%.0f studs)", nearestSpawn:GetFullName(), sd))
+        end
+        logLine("== selesai: tekan Salin Log ==")
+    end)
+
+    -- Loop utama: masuk training dengan strategi bergantian bila gagal
     task.spawn(function()
         local lastTry = os.clock() - 9 -- percobaan pertama sekitar 3 dtk setelah script jalan
+        tr.try = 0
         while alive do
             local st = attr("State")
-            if trainOn and tr.pos and not running and getHRP()
+            if trainOn and not running and getHRP()
                 and st ~= nil and st ~= "Training" and os.clock() - lastTry >= 12 then
                 lastTry = os.clock()
-                local speed = clamp(tonumber(speedBox.Text) or 60, 5, 500)
-                status.Text = "Training: menuju posisi training"
-                if trainWalk(tr.pos, speed, 2) then
-                    status.Text = "Training: menunggu mulai"
-                    if not waitTraining(4) and alive and trainOn and not running then
-                        local p = findTrainPrompt(tr.pos)
-                        if p then
-                            status.Text = "Training: menekan " .. tostring(p.ObjectText)
-                            pressPrompt(p)
-                            waitTraining(5)
+                local list = targets()
+                if #list == 0 then
+                    local has = tr.pos or tr.rel or tostring(tr.nameBox.Text):match("%S")
+                    status.Text = has and "Training: target di luar jangkauan (server beda?), Set ulang"
+                        or "Training: atur Set Posisi Training dulu"
+                else
+                    local i = (tr.try % #list) + 1
+                    local t = list[i]
+                    local speed = clamp(tonumber(speedBox.Text) or 60, 5, 500)
+                    status.Text = "Training: menuju posisi (" .. t.label .. ")"
+                    if trainWalk(t.pos, speed, 2) then
+                        status.Text = "Training: menunggu mulai"
+                        if not waitTraining(4) and alive and trainOn and not running then
+                            local p = findTrainPrompt(t.pos)
+                            if p then
+                                status.Text = "Training: menekan " .. tostring(p.ObjectText)
+                                pressPrompt(p)
+                                waitTraining(5)
+                            end
                         end
                     end
-                    if inTraining() then status.Text = "Training dimulai" end
+                    if inTraining() then
+                        tr.try = i - 1 -- strategi ini berhasil, pakai lagi lebih dulu
+                        status.Text = "Training dimulai (" .. t.label .. ")"
+                    else
+                        tr.try = i -- coba strategi berikutnya pada percobaan berikut
+                    end
                 end
             end
             task.wait(0.5)
@@ -1415,6 +1570,7 @@ local fieldMap = {
     afterSteal = afterStealBox,
     cineKey = cineKeyBox,
     trainPrompt = tr.promptBox,
+    trainName = tr.nameBox,
     cineTimeout = cineTimeoutBox,
     waitFront = frontBox,
     radius = radiusBox,
@@ -1458,6 +1614,7 @@ local function collectConfig()
     c.toggles.train = trainOn
     if frontPos then c.front = v3t(frontPos) end
     if tr.pos then c.trainPos = v3t(tr.pos) end
+    if tr.rel then c.trainRel = v3t(tr.rel) end
     for _, z in ipairs(zones) do
         local t = v3t(z.pos)
         t.name = z.name
@@ -1487,6 +1644,7 @@ local function applyConfig(c)
     end
     frontPos = t3v(c.front)
     tr.pos = t3v(c.trainPos)
+    tr.rel = t3v(c.trainRel)
     clearZones()
     if type(c.zones) == "table" then
         for i, zd in ipairs(c.zones) do
