@@ -59,6 +59,21 @@ local function clamp(v, a, b)
     return math.max(a, math.min(b, v))
 end
 
+-- Tap SENTUHAN (bukan mouse/keyboard) supaya game tetap di mode layar sentuh
+local VIMtouch
+pcall(function() VIMtouch = game:GetService("VirtualInputManager") end)
+local touchSeq = 0
+local function tapScreen(x, y)
+    if not VIMtouch then return false end
+    touchSeq += 1
+    local tid = touchSeq % 1000 + 1
+    return (pcall(function()
+        VIMtouch:SendTouchEvent(tid, 0, x, y)
+        task.wait(0.05)
+        VIMtouch:SendTouchEvent(tid, 2, x, y)
+    end))
+end
+
 -- ===== GUI =====
 local gui = Instance.new("ScreenGui")
 gui.Name = "AutoStealUI"
@@ -637,10 +652,7 @@ do
             local x = viewport.X - 50
             local y = 50
 
-            VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
-            task.wait(0.05)
-            VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
-            afkCount += 1
+            if tapScreen(x, y) then afkCount += 1 end
         end)
     end
 
@@ -1785,12 +1797,7 @@ do
         if mode == 1 or mode == 2 then
             if VIM then
                 local x, y = guiCenter(g)
-                local okt = pcall(function()
-                    VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
-                    task.wait(0.05)
-                    VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
-                end)
-                if okt then did = true end
+                if tapScreen(x, y) then did = true end
             end
         end
         return did
@@ -2158,9 +2165,7 @@ do
                 local vp = cam and cam.ViewportSize or Vector2.new(800, 600)
                 local rx = vp.X * 0.8
                 local ry = vp.Y * 0.5
-                VIM:SendMouseButtonEvent(rx, ry, 0, true, game, 0)
-                task.wait(0.05)
-                VIM:SendMouseButtonEvent(rx, ry, 0, false, game, 0)
+                tapScreen(rx, ry)
             end)
         end
 
@@ -2179,7 +2184,7 @@ do
 
                     clickGui(b)
 
-                    if lbl then pressHotkey(lbl) end
+                    -- pressHotkey dimatikan: input keyboard membuat game pindah ke mode PC
 
                     task.wait(0.35)
                 else
