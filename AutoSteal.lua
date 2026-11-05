@@ -743,27 +743,39 @@ end
 
 task.spawn(function()
     local lastText = ""
+    local lastEnds, lastFire = nil, -math.huge
     while alive do
+        -- cari remote boost selalu (tidak menunggu Auto Training ON)
+        if not boostRemote then
+            local r = RS:FindFirstChild("Remotes")
+            boostRemote = r and r:FindFirstChild("RequestRowingBoost")
+        end
         if trainOn then
-            if not boostRemote then
-                local r = RS:FindFirstChild("Remotes")
-                boostRemote = r and r:FindFirstChild("RequestRowingBoost")
-            end
             local state = attr("State")
             local window = attr("RowBoostWindow")
+            local ends = attr("RowBoostEndsAt")
             if boostRemote and state == "Training" and type(window) == "number" then
-                if window ~= trainLast then
+                -- jendela boost baru = nomor window berubah ATAU batas waktu (RowBoostEndsAt) baru muncul
+                local fresh = (window ~= trainLast) or (type(ends) == "number" and ends ~= lastEnds)
+                if fresh then
                     trainLast = window
-                    local okf = pcall(function()
-                        boostRemote:FireServer({ window = window })
-                    end)
-                    if okf then
-                        trainCount += 1
-                        if logOn then logLine("[boost] window=" .. tostring(window)) end
+                    if type(ends) == "number" then lastEnds = ends end
+                    if os.clock() - lastFire >= 0.5 then
+                        lastFire = os.clock()
+                        local okf = pcall(function()
+                            boostRemote:FireServer({ window = window })
+                        end)
+                        if okf then
+                            trainCount += 1
+                            if logOn then
+                                logLine("[boost] window=" .. tostring(window) .. " ends=" .. tostring(ends))
+                            end
+                        end
                     end
                 end
             else
                 trainLast = nil
+                lastEnds = nil
             end
             local txt = string.format("State: %s | Boost: %d", tostring(state), trainCount)
             if not boostRemote then txt = "Remote boost belum ditemukan" end
