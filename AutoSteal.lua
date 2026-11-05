@@ -2118,25 +2118,102 @@ do
             return false
         end
 
+        -- Cari tombol: teks persis ATAU diawali kata kunci ("DROP [X]" tetap cocok dengan "drop")
+        local function findDropBtn(key)
+            key = norm(key)
+            if key == "" then return nil end
+            for _, o in ipairs(pg:GetDescendants()) do
+                if (o:IsA("TextLabel") or o:IsA("TextButton")) and o.Text ~= "" and not o:IsDescendantOf(gui) then
+                    local t = norm(o.Text)
+                    if (t == key or t:sub(1, #key + 1) == key .. " ")
+                        and o.AbsoluteSize.X > 1 and visibleDeep(o) then
+                        local btn = (o:IsA("GuiButton") and o) or o:FindFirstAncestorWhichIsA("GuiButton") or o
+                        return btn, o
+                    end
+                end
+            end
+            return nil
+        end
+
+        -- Titik layar yang kosong (tidak ada GUI di atasnya)
+        local function emptySpot()
+            local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(800, 400)
+            local inset = GuiService:GetGuiInset()
+            for _, fy in ipairs({ 0.45, 0.6, 0.3, 0.7 }) do
+                for _, fx in ipairs({ 0.5, 0.35, 0.65, 0.2, 0.8 }) do
+                    local x, y = vp.X * fx, vp.Y * fy
+                    local okq, objs = pcall(function()
+                        return pg:GetGuiObjectsAtPosition(x - inset.X, y - inset.Y)
+                    end)
+                    if okq and #objs == 0 then return x, y end
+                end
+            end
+            return vp.X * 0.5, vp.Y * 0.5
+        end
+
+        -- Pindahkan kursor virtual dan tap area kosong supaya tombol keluar dari keadaan hover
+        -- dan kembali ke posisi normal (sama seperti tap manual di area kosong)
+        local function resetHover()
+            if not VIM then return end
+            local x, y = emptySpot()
+            pcall(function()
+                VIM:SendMouseMoveEvent(x, y, game)
+                task.wait(0.03)
+                VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
+                task.wait(0.03)
+                VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+                VIM:SendMouseMoveEvent(x, y, game)
+            end)
+        end
+
+        -- Tombol pintasan dari teks tombol, mis. "DROP [X]" -> X
+        local function pressHotkey(lbl)
+            if not (VIM and lbl) then return false end
+            local k = tostring(lbl.Text):match("%[(%w)%]")
+            if not k then return false end
+            local okk, kc = pcall(function() return Enum.KeyCode[k:upper()] end)
+            if not (okk and kc) then return false end
+            return pcall(function()
+                VIM:SendKeyEvent(true, kc, false, game)
+                task.wait(0.05)
+                VIM:SendKeyEvent(false, kc, false, game)
+            end)
+        end
+
         -- Tekan DROP / SURE? sampai tidak ada lagi tombol dengan teks itu
         local function doDrop()
             local clicks, t0 = 0, os.clock()
             local lastFound = t0
             while alive and dropOn and os.clock() - t0 < 25 and clicks < 12 do
-                local b = findByText(bs.dropTextBox.Text, nil, true)
-                    or findByText(bs.dropSureBox.Text, nil, true)
+                local b, lbl = findDropBtn(bs.dropTextBox.Text)
+                if not b then b, lbl = findDropBtn(bs.dropSureBox.Text) end
                 if b then
                     lastFound = os.clock()
+                    -- 1) reset hover dulu, tunggu tombol kembali ke posisi normal, lalu cari ulang
+                    resetHover()
+                    task.wait(0.35)
+                    local b2, lbl2 = findDropBtn(bs.dropTextBox.Text)
+                    if not b2 then b2, lbl2 = findDropBtn(bs.dropSureBox.Text) end
+                    if b2 then b, lbl = b2, lbl2 end
+                    -- 2) tekan (sinyal tidak bergantung posisi; sentuh memakai posisi terbaru)
                     clicks += 1
                     dsay("tekan tombol (" .. clicks .. ")")
                     clickGui(b)
-                    task.wait(0.5)
+                    -- 3) cadangan: tombol pintasan [X] kalau tombol masih ada setelah beberapa kali tekan
+                    if clicks >= 3 and clicks % 2 == 1 then
+                        task.wait(0.3)
+                        if findDropBtn(bs.dropTextBox.Text) or findDropBtn(bs.dropSureBox.Text) then
+                            pressHotkey(lbl)
+                        end
+                    end
+                    task.wait(0.4)
                 else
                     if clicks > 0 and os.clock() - lastFound > 1.2 then break end
                     if clicks == 0 and os.clock() - t0 > 8 then break end
                     task.wait(0.15)
                 end
             end
+            if clicks > 0 then resetHover() end
             return clicks
         end
 
