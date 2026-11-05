@@ -405,8 +405,9 @@ bs.modeBtn = mkBtn(mkRow(32), "Metode klik: SINYAL+SENTUH", COL_GREY)
 bs.modeBtn.Size = UDim2.new(1, 0, 1, 0)
 
 bs.testGo, bs.testHome = twoBtns("Tes GO", COL_GREY, "Tes Rumah", COL_GREY)
-bs.testFire = mkBtn(mkRow(32), "Tes FIRE", COL_GREY)
-bs.testFire.Size = UDim2.new(1, 0, 1, 0)
+bs.testFire, bs.testWalk = twoBtns("Tes FIRE", COL_GREY, "Tes Jalan ke Boss", COL_GREY)
+bs.scanBoss = mkBtn(mkRow(32), "Scan Nama Boss (ke log)", COL_GREY)
+bs.scanBoss.Size = UDim2.new(1, 0, 1, 0)
 
 bs.bossRespawnBtn = mkBtn(mkRow(32), "Respawn ke base bila tombol rumah gagal: ON", COL_GREEN)
 bs.bossRespawnBtn.Size = UDim2.new(1, 0, 1, 0)
@@ -527,6 +528,9 @@ local btnCopyLog, btnClearLog = twoBtns("Salin Log", COL_BLUE, "Hapus Log", COL_
 
 bs.scanGui = mkBtn(mkRow(32), "Scan GUI tampil (tombol & teks)", COL_GREY)
 bs.scanGui.Size = UDim2.new(1, 0, 1, 0)
+
+bs.scanBoss = mkBtn(mkRow(32), "Scan Objek Boss di Sekitar (nama)", COL_GREY)
+bs.scanBoss.Size = UDim2.new(1, 0, 1, 0)
 
 local scanBtn = mkBtn(mkRow(32), "Scan Prompt di Sekitar Saya", COL_GREY)
 scanBtn.Size = UDim2.new(1, 0, 1, 0)
@@ -1817,7 +1821,7 @@ do
 
     local function walk(target, speed, stopDist, maxT)
         local t0 = os.clock()
-        while alive and bs.on and not running do
+        while alive and (bs.on or bs.walkTest) and not running do
             local hrp = getHRP()
             if not hrp then return false end
             local delta = target - hrp.Position
@@ -1862,17 +1866,21 @@ do
         return nil
     end
 
-    local function approach(speed)
+    local function approach(speed, maxT)
         local tgt, stop = bossObjPos(), 12
         if not tgt then tgt, stop = bs.pos, 2 end
-        if not tgt then return end
+        if not tgt then
+            say("zona boss belum diset (Set Zona Boss / nama objek)")
+            return false
+        end
         say("menuju zona boss")
-        walk(tgt, speed, stop, 40)
+        return walk(tgt, speed, stop, maxT or 40)
     end
 
     local nextOk = 0
+    local nextFight = 0
 
-    local function runBoss(goBtn)
+    local function runBoss(goBtn, inFight)
         bossBusy = true
         bossObj = nil
         local okr, e = pcall(function()
@@ -1882,37 +1890,46 @@ do
             local start = hrp.Position
             if logOn then logLine("[boss] mulai, State=" .. tostring(attr("State"))) end
 
-            local wait = clamp(tonumber(bs.afterGoBox.Text) or 4, 1, 15)
-            local moved = false
-            for attempt = 1, 3 do
-                if not (alive and bs.on) then return end
-                local btn = goBtn
-                if not btn or not btn.Parent or not visibleDeep(btn) then
-                    btn = findNotice()
+            if inFight then
+                if logOn then logLine("[boss] fight terdeteksi tanpa GO, auto fire") end
+            else
+                local wait = clamp(tonumber(bs.afterGoBox.Text) or 4, 1, 15)
+                local moved = false
+                for attempt = 1, 3 do
+                    if not (alive and bs.on) then return end
+                    local btn = goBtn
+                    if not btn or not btn.Parent or not visibleDeep(btn) then
+                        btn = findNotice()
+                    end
+                    if not btn then break end
+                    say("tekan GO (" .. attempt .. ")")
+                    clickGui(btn, attempt > 1 and 1 or nil)
+                    local t0 = os.clock()
+                    while os.clock() - t0 < wait and alive and bs.on do
+                        task.wait(0.2)
+                        local h = getHRP()
+                        if h and (h.Position - start).Magnitude > 40 then moved = true break end
+                    end
+                    if moved then break end
+                    goBtn = nil
                 end
-                if not btn then break end
-                say("tekan GO (" .. attempt .. ")")
-                clickGui(btn, attempt > 1 and 1 or nil)
-                local t0 = os.clock()
-                while os.clock() - t0 < wait and alive and bs.on do
-                    task.wait(0.2)
-                    local h = getHRP()
-                    if h and (h.Position - start).Magnitude > 40 then moved = true break end
+                if not moved then
+                    nextOk = os.clock() + 90
+                    say("GO tidak memindahkan karakter (cek Tes GO / metode klik)")
+                    return
                 end
-                if moved then break end
-                goBtn = nil
-            end
-            if not moved then
-                nextOk = os.clock() + 90
-                say("GO tidak memindahkan karakter (cek Tes GO / metode klik)")
-                return
-            end
-            task.wait(0.8)
-            local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
-            if hum and hum.SeatPart then pcall(function() hum.Sit = false end) end
-            if logOn then logLine("[boss] setelah GO, State=" .. tostring(attr("State"))) end
+                task.wait(0.8)
+                local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+                if hum and hum.SeatPart then pcall(function() hum.Sit = false end) end
+                if logOn then logLine("[boss] setelah GO, State=" .. tostring(attr("State"))) end
 
-            approach(speed)
+            end
+
+            if inFight then
+                if not inRange() then approach(speed, 15) end
+            else
+                approach(speed)
+            end
 
             local fightMax = clamp(tonumber(bs.fightMaxBox.Text) or 240, 30, 900)
             local tStart = os.clock()
@@ -1937,7 +1954,7 @@ do
                 end
                 if seenFire and now - lastRange > 1.5 then
                     lastRange = now
-                    if not inRange() then approach(speed) end
+                    if not inRange() then approach(speed, 6) end
                 end
                 if seenFire and now - lastSeen > 4 then break end
                 if not seenFire and now - tStart > 90 then
@@ -1986,15 +2003,22 @@ do
             warn(e)
         end
         nextOk = math.max(nextOk, os.clock() + 30)
+        nextFight = os.clock() + 8
         bossBusy = false
         tr.retryNow = true
     end
 
     task.spawn(function()
         while alive do
-            if bs.on and not running and not bossBusy and os.clock() >= nextOk then
-                local goBtn = findNotice()
-                if goBtn then runBoss(goBtn) end
+            if bs.on and not running and not bossBusy then
+                if os.clock() >= nextOk then
+                    local goBtn = findNotice()
+                    if goBtn then runBoss(goBtn) end
+                end
+                -- Sudah di arena (GO manual) dan tombol FIRE terlihat: langsung auto fire
+                if not bossBusy and os.clock() >= nextFight and findFire() then
+                    runBoss(nil, true)
+                end
             end
             task.wait(0.5)
         end
@@ -2061,6 +2085,111 @@ do
         flash(b)
         clickGui(b)
         status.Text = "Tes FIRE: ditekan (kotak merah = tombol yang ditemukan)"
+    end)
+
+    bs.scanBoss.Activated:Connect(function()
+        local hrp = getHRP()
+        if not hrp then return end
+        logLine("== Scan objek dekat boss (radius 400) ==")
+        local seen, list = {}, {}
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if (d:IsA("Model") or d:IsA("BasePart")) and not (lp.Character and d:IsDescendantOf(lp.Character)) then
+                local p
+                if d:IsA("Model") then
+                    local okp, pv = pcall(function() return d:GetPivot().Position end)
+                    p = okp and pv or nil
+                else
+                    p = d.Position
+                end
+                if p then
+                    local dist = (p - hrp.Position).Magnitude
+                    if dist <= 400 then
+                        local isModel = d:IsA("Model")
+                        local npc = isModel and d:FindFirstChildOfClass("Humanoid") ~= nil
+                            and Players:GetPlayerFromCharacter(d) == nil
+                        local e = seen[d.Name]
+                        if not e then
+                            e = { name = d.Name, n = 0, dist = dist, npc = npc, model = isModel }
+                            seen[d.Name] = e
+                            list[#list + 1] = e
+                        end
+                        e.n += 1
+                        if dist < e.dist then e.dist = dist end
+                        if npc then e.npc = true end
+                    end
+                end
+            end
+        end
+        table.sort(list, function(a, b)
+            if a.npc ~= b.npc then return a.npc end
+            if a.model ~= b.model then return a.model end
+            return a.dist < b.dist
+        end)
+        for i = 1, math.min(#list, 20) do
+            local e = list[i]
+            logLine(string.format("[%s] %s x%d, %.0f studs", e.npc and "NPC" or (e.model and "Model" or "Part"),
+                e.name, e.n, e.dist))
+        end
+        if bs.nameBox.Text == "" and list[1] and list[1].npc then
+            bs.nameBox.Text = list[1].name
+            logLine("Nama objek boss diisi otomatis: " .. list[1].name)
+            status.Text = "Nama boss diisi: " .. list[1].name .. " (cek log, Save Config)"
+        else
+            status.Text = "Scan selesai, lihat tab Log"
+        end
+    end)
+
+    bs.testWalk.Activated:Connect(function()
+        if bossBusy or bs.walkTest then return end
+        task.spawn(function()
+            bs.walkTest = true
+            local speed = clamp(tonumber(speedBox.Text) or 60, 5, 500)
+            local okw = approach(speed, 40)
+            bs.walkTest = false
+            status.Text = okw and "Tes Jalan: sampai di zona boss" or "Tes Jalan: gagal / zona belum diset"
+        end)
+    end)
+
+    bs.scanBoss.Activated:Connect(function()
+        local hrp = getHRP()
+        if not hrp then return end
+        logLine("== Scan objek boss (radius 500) ==")
+        local list, seen = {}, {}
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if d:IsA("Model") and not (lp.Character and d:IsDescendantOf(lp.Character))
+                and not Players:GetPlayerFromCharacter(d) then
+                local okp, pos = pcall(function() return d:GetPivot().Position end)
+                if okp then
+                    local dist = (pos - hrp.Position).Magnitude
+                    local hum = d:FindFirstChildOfClass("Humanoid") ~= nil
+                    if dist <= 500 and not seen[d.Name] and (hum or d.Parent == workspace
+                        or (d.Parent and d.Parent:IsA("Folder"))) then
+                        seen[d.Name] = true
+                        list[#list + 1] = { name = d.Name, dist = dist, hum = hum,
+                            path = (d:GetFullName():gsub("^Workspace%.", "")) }
+                    end
+                end
+            end
+        end
+        table.sort(list, function(a, b)
+            if a.hum ~= b.hum then return a.hum end
+            return a.dist < b.dist
+        end)
+        if #list == 0 then
+            logLine("tidak ada model di dekat (coba dekati bossnya)")
+            return
+        end
+        for i = 1, math.min(#list, 15) do
+            local o = list[i]
+            logLine(string.format("%s%s | %.0f stud | %s", o.hum and "[NPC] " or "", o.name, o.dist, o.path))
+        end
+        local top = list[1]
+        if top.hum then
+            bs.nameBox.Text = top.name
+            status.Text = "Nama objek boss terisi: " .. top.name .. " (cek log, Save Config)"
+        else
+            status.Text = "Tidak ada NPC terdeteksi, lihat daftar di log"
+        end
     end)
 
     bs.scanGui.Activated:Connect(function()
