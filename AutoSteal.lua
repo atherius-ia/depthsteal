@@ -643,11 +643,8 @@ end)
 afkBtn.Activated:Connect(function() setAfk(not afkOn) end)
 
 -- ===== Skip cinematic (Guardian Entrance / Catch) =====
--- Cara kerja: sembunyikan GUI cinematic berdasarkan kata kunci pada namanya,
--- dan kembalikan kamera ke mode normal kalau game memakainya untuk cinematic.
 local pg = lp:FindFirstChildOfClass("PlayerGui") or lp:WaitForChild("PlayerGui")
 
--- Log ditampilkan di kotak log dalam menu (dan juga di console)
 local logLines = {}
 local function logLine(s)
     print(s)
@@ -657,7 +654,6 @@ local function logLine(s)
     logLabel.Text = table.concat(logLines, "\n", from, #logLines)
 end
 
--- Kamera hanya ditimpa selama "jendela cinematic" (beberapa detik setelah ada GUI cinematic disembunyikan)
 local cinematicUntil = 0
 local function markCinematic()
     cinematicUntil = os.clock() + 10
@@ -722,7 +718,6 @@ local function shortName(inst)
     return n .. " (" .. inst.ClassName .. ")"
 end
 
--- Pantau ScreenGui (Enabled) dan frame tingkat atas (Visible): dicatat di log saat menyala
 local watched = setmetatable({}, { __mode = "k" })
 local function watch(o)
     if watched[o] then return end
@@ -762,11 +757,9 @@ for _, g in ipairs(pg:GetChildren()) do
     end
 end
 
--- GUI yang baru muncul
 table.insert(conns, pg.DescendantAdded:Connect(function(inst)
     if not (inst:IsA("ScreenGui") or inst:IsA("GuiObject")) then return end
     if inst == gui or inst:IsDescendantOf(gui) then return end
-    -- Penanda untuk siklus: GUI "Induk/Nama" yang dicocokkan dengan kolom "Tunggu GUI setelah steal"
     if inst:IsA("GuiObject") and inst.Parent then
         local key = cineKeyBox.Text:lower():match("^%s*(.-)%s*$")
         if key ~= "" and (inst.Parent.Name .. "/" .. inst.Name):lower():find(key, 1, true) then
@@ -789,7 +782,6 @@ table.insert(conns, pg.DescendantAdded:Connect(function(inst)
     end
 end))
 
--- GUI yang sudah ada tapi dinyalakan game saat cinematic
 task.spawn(function()
     while alive do
         if skipGuardOn or skipCatchOn then
@@ -817,7 +809,6 @@ task.spawn(function()
     end
 end)
 
--- Kamera cinematic: timpa posisi kamera di akhir tiap frame supaya tetap mengikuti karakter
 do
     local lastCam
     local seenScriptable = false
@@ -842,7 +833,6 @@ do
                 end
             end
         elseif seenScriptable then
-            -- cinematic selesai (kamera kembali normal): hentikan penimpaan
             seenScriptable = false
             cinematicUntil = 0
         end
@@ -897,7 +887,6 @@ task.spawn(function()
     local lastText = ""
     local lastEnds, lastFire = nil, -math.huge
     while alive do
-        -- cari remote boost selalu (tidak menunggu Auto Training ON)
         if not boostRemote then
             local r = RS:FindFirstChild("Remotes")
             boostRemote = r and r:FindFirstChild("RequestRowingBoost")
@@ -907,7 +896,6 @@ task.spawn(function()
             local window = attr("RowBoostWindow")
             local ends = attr("RowBoostEndsAt")
             if boostRemote and state == "Training" and type(window) == "number" then
-                -- jendela boost baru = nomor window berubah ATAU batas waktu (RowBoostEndsAt) baru muncul
                 local fresh = (window ~= trainLast) or (type(ends) == "number" and ends ~= lastEnds)
                 if fresh then
                     trainLast = window
@@ -983,7 +971,6 @@ local function pause(t, id)
     return alivePath(id)
 end
 
--- exact = true: pakai target apa adanya (tanpa kunci Y / offset), dipakai untuk menyamakan tinggi
 local function moveToRaw(target, speed, stopDist, id, exact)
     stopDist = stopDist or 1.5
     if not exact then
@@ -1023,16 +1010,14 @@ local function moveTo(target, speed, stopDist, id, exact)
     return r
 end
 
--- Selalu jalan ke titik Depan, tunggu agar tinggi kapal menyesuaikan, baru ke zona steal
 local function syncHeight(speed, id)
     local h = getHRP()
     if not h then return false end
 
     status.Text = "Ke depan dulu"
-    baseY = h.Position.Y -- tahan tinggi saat ini selama berjalan ke depan
+    baseY = h.Position.Y
     if not moveTo(frontPos, speed, 1.5, id) then return false end
 
-    -- Opsional: samakan tinggi ke Y titik Depan (hanya jika Jaga Y + Sinkron aktif)
     if keepY and syncY then
         baseY = frontPos.Y
         local yOff = tonumber(yOffsetBox.Text) or 0
@@ -1043,7 +1028,6 @@ local function syncHeight(speed, id)
         if not moveTo(tgt, math.min(speed, 20), 0.2, id, true) then return false end
     end
 
-    -- Tunggu di depan supaya tinggi kapal sudah sesuai
     local w = clamp(tonumber(syncWaitBox.Text) or 2, 0, 10)
     status.Text = string.format("Tunggu di depan %.1f dtk", w)
     return pause(w, id)
@@ -1256,10 +1240,7 @@ local function doSteals(z, radius, speed, id)
 end
 
 -- ===== Auto masuk Training =====
--- Jalan ke kursi mesin dayung kosong terdekat (atau posisi training yang disimpan) lalu duduk;
--- kalau training belum mulai sendiri, tekan prompt terdekat di sekitar posisi itu.
--- Hanya aktif saat Auto Steal tidak berjalan dan rutinitas boss tidak sedang berjalan.
-tr.retryNow = false -- diisi true oleh modul boss supaya training langsung dilanjutkan
+tr.retryNow = false
 do
     local function inTraining()
         return attr("State") == "Training"
@@ -1326,7 +1307,6 @@ do
         end)
     end
 
-    -- Referensi spawn: posisi karakter saat baru muncul di server (dipakai untuk posisi relatif)
     local function captureRef(why)
         local hrp = getHRP()
         if hrp and attr("State") ~= "Training" then
@@ -1346,10 +1326,9 @@ do
         ch:WaitForChild("HumanoidRootPart", 10)
         task.wait(1)
         captureRef("respawn")
-        tr.retryNow = true -- training langsung dicoba setelah respawn
+        tr.retryNow = true
     end))
 
-    -- Cari objek bernama (substring) terdekat dari posisi karakter
     local function findByName(key, from)
         key = key:lower()
         local bestPos, bd
@@ -1368,7 +1347,6 @@ do
         return bestPos
     end
 
-    -- Cari kursi kosong terdekat yang path-nya mengandung kata kunci
     local function findFreeSeat(key)
         local hrp = getHRP()
         if not hrp then return nil end
@@ -1386,7 +1364,6 @@ do
         return best
     end
 
-    -- Jatuhkan karakter tepat di atas kursi supaya sentuhan memicu duduk
     local function trySit(seat)
         local hrp = getHRP()
         local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
@@ -1401,7 +1378,7 @@ do
             task.wait(0.1)
         end
         if hum.SeatPart ~= seat then
-            pcall(function() seat:Sit(hum) end) -- cadangan, mungkin tidak ada di versi Roblox ini
+            pcall(function() seat:Sit(hum) end)
             task.wait(0.5)
         end
         if logOn then
@@ -1409,8 +1386,6 @@ do
         end
     end
 
-    -- Daftar target: kursi -> nama objek -> relatif ke spawn -> posisi absolut
-    -- Mesin dayung milik sendiri: nomor mesin = BaseIndex pada base yang OwnerUserId-nya akun ini
     tr.ownSeatKey = function()
         local map = workspace:FindFirstChild("Map")
         local bases = map and map:FindFirstChild("Bases")
@@ -1453,7 +1428,6 @@ do
         if tr.pos then
             list[#list + 1] = { label = "absolut", pos = tr.pos }
         end
-        -- buang target yang terlalu jauh (kemungkinan posisi dari server lain)
         local out = {}
         for _, t in ipairs(list) do
             if (t.pos - from).Magnitude <= 1500 then out[#out + 1] = t end
@@ -1475,7 +1449,6 @@ do
         refresh()
     end)
 
-    -- Scan area di bawah/sekitar karakter, hasilnya ke kotak log (pakai Salin Log)
     tr.scanBtn.Activated:Connect(function()
         local hrp = getHRP()
         if not hrp then return end
@@ -1539,9 +1512,8 @@ do
         logLine("== selesai: tekan Salin Log ==")
     end)
 
-    -- Loop utama: masuk training dengan strategi bergantian bila gagal
     task.spawn(function()
-        local lastTry = os.clock() - 9 -- percobaan pertama sekitar 3 dtk setelah script jalan
+        local lastTry = os.clock() - 9
         tr.try = 0
         while alive do
             local st = attr("State")
@@ -1578,10 +1550,10 @@ do
                         end
                     end
                     if inTraining() then
-                        tr.try = i - 1 -- strategi ini berhasil, pakai lagi lebih dulu
+                        tr.try = i - 1
                         status.Text = "Training dimulai (" .. t.label .. ")"
                     else
-                        tr.try = i -- coba strategi berikutnya pada percobaan berikut
+                        tr.try = i
                     end
                 end
             end
@@ -1589,7 +1561,6 @@ do
         end
     end)
 
-    -- Log perubahan atribut pemain (untuk melihat nama/nilai State yang dipakai game)
     table.insert(conns, lp.AttributeChanged:Connect(function(name)
         if logOn and name ~= "RowBoostWindow" then
             logLine("[attr] " .. name .. " = " .. tostring(lp:GetAttribute(name)))
@@ -1606,10 +1577,6 @@ do
 end
 
 -- ===== Auto Boss =====
--- Alur: notifikasi boss muncul -> tekan GO -> (game teleport ke area boss) -> jalan ke zona boss
--- sampai IN RANGE -> tekan FIRE berulang sampai fight selesai -> tekan tombol rumah ->
--- Auto Training lanjut sendiri. Berjalan hanya saat Auto Steal tidak aktif.
--- Semua elemen GUI game dicari lewat TEKS yang terlihat, bukan nama objek, jadi tidak perlu tahu path-nya.
 do
     local GuiService = game:GetService("GuiService")
     local VIM
@@ -1620,14 +1587,12 @@ do
         status.Text = "Boss: " .. s
     end
 
-    -- Normalisasi teks: huruf kecil, tanpa tanda baca, spasi tunggal ("GO!" -> "go")
     local function norm(s)
         s = tostring(s or ""):lower():gsub("[^%w%s]", "")
         s = s:gsub("%s+", " ")
         return (s:match("^%s*(.-)%s*$"))
     end
 
-    -- Terlihat = objek dan semua induknya Visible, ScreenGui-nya Enabled
     local function visibleDeep(o)
         local c = o
         while c and c ~= game do
@@ -1638,8 +1603,6 @@ do
         return false
     end
 
-    -- Cari teks yang terlihat. exact=true: teks harus persis sama; false: mengandung kata kunci.
-    -- Mengembalikan tombol terdekat (GuiButton) yang membungkus teks itu, atau teksnya sendiri.
     local function findByText(key, root, exact)
         key = norm(key)
         if key == "" then return nil end
@@ -1667,7 +1630,6 @@ do
         return table.concat(parts, " ")
     end
 
-    -- Notifikasi boss: label "FIGHT IN ..." yang terlihat, lalu cari tombol GO di wadah yang sama
     local function findNotice()
         local key = norm(bs.keyBox.Text)
         if key == "" then return nil end
@@ -1701,8 +1663,6 @@ do
         return findByText(bs.rangeBox.Text, nil, false) ~= nil
     end
 
-    -- Tombol rumah (ikon tanpa teks): cari berdasarkan nama, kalau tidak ada ambil tombol
-    -- tepat di kiri tombol "TP TO OCEAN" pada baris yang sama
     local function findHomeBtn()
         local hkey = tostring(bs.homeNameBox.Text):lower():match("^%s*(.-)%s*$")
         if hkey ~= "" then
@@ -1741,7 +1701,6 @@ do
         return nil
     end
 
-    -- Kotak merah sesaat di atas elemen yang ditemukan (untuk memeriksa deteksi lewat tombol Tes)
     local function flash(g)
         pcall(function()
             local f = Instance.new("Frame")
@@ -1769,7 +1728,6 @@ do
         return x, y + (tonumber(bs.clickYBox.Text) or 0)
     end
 
-    -- mode 1 = sinyal + sentuh, 2 = sentuh saja, 3 = sinyal saja
     local function clickGui(g, forceMode)
         if not g or not g.Parent then return false end
         local mode = forceMode or bs.mode
@@ -1806,7 +1764,6 @@ do
         return did
     end
 
-    -- ===== Gerak boss =====
     local function walk(target, speed, stopDist, maxT)
         local t0 = os.clock()
         while alive and bs.on and not running do
@@ -1831,7 +1788,6 @@ do
         return false
     end
 
-    -- Objek boss di workspace (opsional), dicari sekali lalu disimpan supaya tidak scan berulang
     local bossObj
     local function bossObjPos()
         local key = tostring(bs.nameBox.Text):lower():match("^%s*(.-)%s*$")
@@ -1863,8 +1819,7 @@ do
         walk(tgt, speed, stop, 40)
     end
 
-    -- ===== Rutinitas boss =====
-    local nextOk = 0 -- waktu paling awal boleh memicu boss lagi
+    local nextOk = 0
 
     local function runBoss(goBtn)
         bossBusy = true
@@ -1876,7 +1831,6 @@ do
             local start = hrp.Position
             if logOn then logLine("[boss] mulai, State=" .. tostring(attr("State"))) end
 
-            -- 1) Tekan GO sampai karakter berpindah (teleport ke area boss)
             local wait = clamp(tonumber(bs.afterGoBox.Text) or 4, 1, 15)
             local moved = false
             for attempt = 1, 3 do
@@ -1898,7 +1852,7 @@ do
                 goBtn = nil
             end
             if not moved then
-                nextOk = os.clock() + 90 -- hindari mengulang terus kalau GO tidak berfungsi
+                nextOk = os.clock() + 90
                 say("GO tidak memindahkan karakter (cek Tes GO / metode klik)")
                 return
             end
@@ -1907,10 +1861,8 @@ do
             if hum and hum.SeatPart then pcall(function() hum.Sit = false end) end
             if logOn then logLine("[boss] setelah GO, State=" .. tostring(attr("State"))) end
 
-            -- 2) Ke zona boss
             approach(speed)
 
-            -- 3) Tunggu fight mulai, lalu auto fire sampai selesai
             local fightMax = clamp(tonumber(bs.fightMaxBox.Text) or 240, 30, 900)
             local tStart = os.clock()
             local seenFire, lastSeen, lastRange = false, os.clock(), 0
@@ -1936,7 +1888,7 @@ do
                     lastRange = now
                     if not inRange() then approach(speed) end
                 end
-                if seenFire and now - lastSeen > 4 then break end -- tombol FIRE hilang = fight selesai
+                if seenFire and now - lastSeen > 4 then break end
                 if not seenFire and now - tStart > 90 then
                     say("fight tidak mulai (cek teks FIRE)")
                     break
@@ -1946,7 +1898,6 @@ do
             end
             if not (alive and bs.on) then return end
 
-            -- 4) Pulang lewat tombol rumah
             task.wait(1.5)
             say("kembali ke rumah")
             local before = getHRP() and getHRP().Position
@@ -1980,10 +1931,9 @@ do
         end
         nextOk = math.max(nextOk, os.clock() + 30)
         bossBusy = false
-        tr.retryNow = true -- training langsung dilanjutkan (kalau Auto Training ON)
+        tr.retryNow = true
     end
 
-    -- Pemantau notifikasi
     task.spawn(function()
         while alive do
             if bs.on and not running and not bossBusy and os.clock() >= nextOk then
@@ -1994,7 +1944,6 @@ do
         end
     end)
 
-    -- ===== Kontrol UI =====
     setBoss = function(on)
         bs.on = on
         bs.btn.Text = "Auto Boss: " .. (on and "ON" or "OFF")
@@ -2058,7 +2007,6 @@ do
         status.Text = "Tes FIRE: ditekan (kotak merah = tombol yang ditemukan)"
     end)
 
-    -- Scan semua tombol & teks yang sedang terlihat, hasil ke kotak log (tab Log)
     bs.scanGui.Activated:Connect(function()
         logLine("== Scan GUI tampil ==")
         local n = 0
@@ -2080,11 +2028,6 @@ do
     end)
 
     -- ===== Auto Drop telur ukuran kecil =====
-    -- Setelah steal ada animasi ukuran (SMALL, BIG, HUGE, dst). Ukuran akhir = label terakhir yang
-    -- terbaca sebelum animasi hilang. Kalau ukuran akhir ada di daftar "Ukuran yang di-drop",
-    -- tombol DROP lalu SURE? ditekan berulang sampai tombolnya hilang.
-    -- Label ukuran dicari lewat posisi: label huruf saja tepat di bawah label pengali (mis. "x1.38").
-    -- Dibungkus fungsi sendiri supaya tidak melewati batas 200 variabel lokal per fungsi (Luau).
     ;(function()
         local dropOn, dropBusy = false, false
         local multCache
@@ -2146,7 +2089,6 @@ do
             return false
         end
 
-        -- Cari tombol: teks persis ATAU diawali kata kunci ("DROP [X]" tetap cocok dengan "drop")
         local function findDropBtn(key)
             key = norm(key)
             if key == "" then return nil end
@@ -2163,7 +2105,6 @@ do
             return nil
         end
 
-        -- Titik layar yang kosong (tidak ada GUI di atasnya)
         local function emptySpot()
             local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(800, 400)
             local inset = GuiService:GetGuiInset()
@@ -2179,8 +2120,6 @@ do
             return vp.X * 0.5, vp.Y * 0.5
         end
 
-        -- Pindahkan kursor virtual dan tap area kosong supaya tombol keluar dari keadaan hover
-        -- dan kembali ke posisi normal (sama seperti tap manual di area kosong)
         local function resetHover()
             if not VIM then return end
             local x, y = emptySpot()
@@ -2194,7 +2133,6 @@ do
             end)
         end
 
-        -- Tombol pintasan dari teks tombol, mis. "DROP [X]" -> X
         local function pressHotkey(lbl)
             if not (VIM and lbl) then return false end
             local k = tostring(lbl.Text):match("%[(%w)%]")
@@ -2208,7 +2146,6 @@ do
             end)
         end
 
-        -- Tekan DROP / SURE? sampai tidak ada lagi tombol dengan teks itu
         local function doDrop()
             local clicks, t0 = 0, os.clock()
             local lastFound = t0
@@ -2217,17 +2154,14 @@ do
                 if not b then b, lbl = findDropBtn(bs.dropSureBox.Text) end
                 if b then
                     lastFound = os.clock()
-                    -- 1) reset hover dulu, tunggu tombol kembali ke posisi normal, lalu cari ulang
                     resetHover()
                     task.wait(0.35)
                     local b2, lbl2 = findDropBtn(bs.dropTextBox.Text)
                     if not b2 then b2, lbl2 = findDropBtn(bs.dropSureBox.Text) end
                     if b2 then b, lbl = b2, lbl2 end
-                    -- 2) tekan (sinyal tidak bergantung posisi; sentuh memakai posisi terbaru)
                     clicks += 1
                     dsay("tekan tombol (" .. clicks .. ")")
                     clickGui(b)
-                    -- 3) cadangan: tombol pintasan [X] kalau tombol masih ada setelah beberapa kali tekan
                     if clicks >= 3 and clicks % 2 == 1 then
                         task.wait(0.3)
                         if findDropBtn(bs.dropTextBox.Text) or findDropBtn(bs.dropSureBox.Text) then
@@ -2296,25 +2230,22 @@ do
         bs.dropBtn.Activated:Connect(function() bs.dropSet(not dropOn) end)
     end)()
 
-    -- ===== Inventori penuh: Auto Steal dimatikan lalu respawn supaya cepat kembali =====
+    -- ===== Inventori penuh =====
     ;(function()
         local invOn, lastTrig = true, -math.huge
 
         local function respawnNow()
             local ch = lp.Character
             local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-            -- 1) tombol respawn milik game (kalau ada dan terlihat)
             local rb = findByText(bs.respawnTextBox.Text, nil, false)
             if rb then
                 clickGui(rb)
                 task.wait(1.2)
             end
-            -- 2) matikan karakter supaya respawn
             if lp.Character == ch and hum and hum.Health > 0 then
                 pcall(function() hum.Health = 0 end)
                 task.wait(1.5)
             end
-            -- 3) cadangan kalau masih hidup
             if lp.Character == ch and ch and ch.Parent then
                 pcall(function() ch:BreakJoints() end)
             end
@@ -2356,7 +2287,6 @@ local function cycle(id)
     local z = zones[selected]
     if not z then return end
 
-    -- 1) Ke Depan dulu, tunggu tinggi kapal sesuai, baru ke zona steal
     if not syncHeight(speed, id) then return end
 
     status.Text = "Menuju " .. z.name
@@ -2372,7 +2302,6 @@ local function cycle(id)
     if stolen > 0 then
         local cineKey = cineKeyBox.Text:match("%S")
         if cineKey then
-            -- Tunggu GUI cinematic muncul (tanpa delay tetap). Kalau sudah muncul selama steal, langsung lanjut.
             local timeout = clamp(tonumber(cineTimeoutBox.Text) or 10, 1, 60)
             local t0 = os.clock()
             if cineCount == c0 then status.Text = "Menunggu " .. cineKeyBox.Text end
@@ -2393,8 +2322,6 @@ local function cycle(id)
         end
     end
 
-    -- Setelah steal, game sendiri memindahkan ke zona aman: cukup kembali ke Depan.
-    -- Ketinggian disamakan dengan posisi sekarang supaya tidak melayang ke Y lama.
     local hh = getHRP()
     if hh then baseY = hh.Position.Y end
     status.Text = "Kembali ke depan"
@@ -2463,7 +2390,6 @@ stabBtn.Activated:Connect(function() setStab(not stabOn) end)
 keepYBtn.Activated:Connect(function() setKeepY(not keepY) end)
 syncBtn.Activated:Connect(function() setSyncY(not syncY) end)
 
--- Tombol darurat: angkat karakter (dan kapal yang menyatu dengannya) 5 studs
 liftBtn.Activated:Connect(function()
     local h = getHRP()
     if not h then return end
@@ -2513,7 +2439,6 @@ local function setRunning(on)
         return
     end
     if on then
-        -- Ketinggian awal (dipakai kalau Jaga Y ON; tiap siklus disegarkan di titik Depan bila Sinkron ON)
         local h = getHRP()
         baseY = h and h.Position.Y or nil
     end
@@ -2783,9 +2708,7 @@ btnAuto.Activated:Connect(function()
         or "Auto-load dimatikan"
 end)
 
--- ===== Notifikasi Discord (disconnect / kick) =====
--- URL webhook disimpan hanya di file lokal executor (AutoStealConfig/_notif.json),
--- bukan di dalam script, supaya tidak ikut bocor kalau script dibagikan.
+-- ===== Notifikasi Discord =====
 do
     local GuiService = game:GetService("GuiService")
     local NOTIF_FILE = FOLDER .. "/_notif.json"
@@ -2895,13 +2818,11 @@ do
         end)
     end
 
-    -- Sumber 1: pesan error resmi Roblox
     table.insert(conns, GuiService.ErrorMessageChanged:Connect(function()
         local okm, msg = pcall(function() return GuiService:GetErrorMessage() end)
         if okm and msg and msg ~= "" then onDisconnect(msg) end
     end))
 
-    -- Sumber 2 (cadangan): kotak ErrorPrompt di CoreGui
     task.spawn(function()
         pcall(function()
             local cg = game:GetService("CoreGui")
@@ -2949,7 +2870,6 @@ do
 
     nf.ping.FocusLost:Connect(function() saveNotif() end)
 
-    -- Muat pengaturan tersimpan; kirim pesan "script aktif" kalau notifikasi ON
     if hasFS then
         pcall(function()
             if isfile(NOTIF_FILE) then
