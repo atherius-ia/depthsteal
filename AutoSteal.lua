@@ -3185,7 +3185,7 @@ do
 end
 
 -- ===== HUD FPS & Ping + toggle 3D (horizontal, pojok kanan atas) =====
-do
+xpcall(function()
     local Stats = game:GetService("Stats")
     local COL_YELLOW = Color3.fromRGB(255, 220, 120)
     local COL_BAD = Color3.fromRGB(255, 120, 120)
@@ -3284,7 +3284,7 @@ do
         local mid = (render3d and fps < 50) or (ping and ping > 100)
         hud.TextColor3 = bad and COL_BAD or (mid and COL_YELLOW or Color3.new(1, 1, 1))
     end))
-end
+end, function(e) warn("HUD error: " .. tostring(e)) end)
 
 -- ===== Minimize / close =====
 local minimized = false
