@@ -3184,49 +3184,76 @@ do
     end
 end
 
--- ===== HUD FPS & Ping =====
+-- ===== HUD FPS & Ping + toggle 3D (horizontal, pojok kanan atas) =====
 do
     local Stats = game:GetService("Stats")
+    local COL_YELLOW = Color3.fromRGB(255, 220, 120)
+    local COL_BAD = Color3.fromRGB(255, 120, 120)
+
+    -- ScreenGui terpisah, tanpa inset, supaya menempel di pojok paling atas
+    local hudGui = Instance.new("ScreenGui")
+    hudGui.Name = "AutoStealHUD"
+    hudGui.ResetOnSpawn = false
+    hudGui.IgnoreGuiInset = true
+    hudGui.DisplayOrder = 999
+    hudGui.Parent = gui.Parent
+
+    local bar2 = Instance.new("Frame")
+    bar2.AnchorPoint = Vector2.new(1, 0)
+    bar2.Position = UDim2.new(1, -6, 0, 4)
+    bar2.Size = UDim2.new(0, 236, 0, 24)
+    bar2.BackgroundColor3 = Color3.new(0, 0, 0)
+    bar2.BackgroundTransparency = 0.35
+    bar2.BorderSizePixel = 0
+    bar2.Parent = hudGui
+    round(bar2, 8)
+
+    local lay = Instance.new("UIListLayout")
+    lay.FillDirection = Enum.FillDirection.Horizontal
+    lay.VerticalAlignment = Enum.VerticalAlignment.Center
+    lay.Padding = UDim.new(0, 4)
+    lay.SortOrder = Enum.SortOrder.LayoutOrder
+    lay.Parent = bar2
+    local pad = Instance.new("UIPadding")
+    pad.PaddingLeft = UDim.new(0, 3)
+    pad.PaddingRight = UDim.new(0, 3)
+    pad.Parent = bar2
 
     local hud = Instance.new("TextLabel")
-    hud.Name = "FpsPingHUD"
-    hud.Size = UDim2.new(0, 120, 0, 40)
-    hud.Position = UDim2.new(1, -130, 0, 10)
-    hud.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
-    hud.BackgroundTransparency = 0.25
-    hud.BorderSizePixel = 0
+    hud.LayoutOrder = 1
+    hud.Size = UDim2.new(0, 164, 0, 18)
+    hud.BackgroundTransparency = 1
     hud.Font = Enum.Font.GothamBold
-    hud.TextSize = 12
+    hud.TextSize = 11
     hud.TextColor3 = Color3.new(1, 1, 1)
-    hud.Text = "FPS: --\nPing: -- ms"
-    hud.Parent = gui
-    round(hud, 8)
+    hud.Text = "FPS: --  |  Ping: -- ms"
+    hud.Parent = bar2
 
-    -- Tombol toggle 3D rendering (hemat GPU/baterai untuk AFK lama)
     local render3d = true
     local rBtn = Instance.new("TextButton")
-    rBtn.Name = "Toggle3DRender"
-    rBtn.Size = UDim2.new(0, 120, 0, 28)
-    rBtn.Position = UDim2.new(1, -130, 0, 56)
+    rBtn.LayoutOrder = 2
+    rBtn.Size = UDim2.new(0, 58, 0, 18)
     rBtn.BackgroundColor3 = COL_GREEN
     rBtn.Text = "3D: ON"
     rBtn.TextColor3 = Color3.new(1, 1, 1)
     rBtn.Font = Enum.Font.GothamBold
-    rBtn.TextSize = 12
-    rBtn.Parent = gui
-    round(rBtn, 8)
+    rBtn.TextSize = 11
+    rBtn.AutoButtonColor = false
+    rBtn.Parent = bar2
+    round(rBtn, 6)
 
     local function set3d(on)
         render3d = on
         pcall(function() RunService:Set3dRenderingEnabled(on) end)
         rBtn.Text = on and "3D: ON" or "3D: OFF"
-        rBtn.BackgroundColor3 = on and COL_GREEN or COL_RED
+        rBtn.BackgroundColor3 = on and COL_GREEN or Color3.new(0, 0, 0)
     end
     rBtn.Activated:Connect(function() set3d(not render3d) end)
 
-    -- Pastikan 3D menyala lagi saat script ditutup / dijalankan ulang
+    -- Saat script ditutup / dijalankan ulang: 3D menyala lagi + HUD dihapus
     table.insert(conns, { Disconnect = function()
         pcall(function() RunService:Set3dRenderingEnabled(true) end)
+        pcall(function() hudGui:Destroy() end)
     end })
 
     local function getPing()
@@ -3249,12 +3276,13 @@ do
         frames, last = 0, now
 
         local ping = getPing()
-        local fpsCol = fps >= 50 and COL_GREEN or (fps >= 30 and Color3.fromRGB(220, 170, 40) or COL_RED)
-        local pingCol = (not ping and COL_GREY) or (ping <= 100 and COL_GREEN) or (ping <= 200 and Color3.fromRGB(220, 170, 40)) or COL_RED
+        local fpsTxt = render3d and tostring(math.floor(fps + 0.5)) or "3D off"
+        local pingTxt = ping and (math.floor(ping + 0.5) .. " ms") or "--"
+        hud.Text = "FPS: " .. fpsTxt .. "  |  Ping: " .. pingTxt
 
-        hud.Text = string.format("FPS: %s\nPing: %s", render3d and tostring(math.floor(fps + 0.5)) or "3D off", ping and (math.floor(ping + 0.5) .. " ms") or "--")
-        hud.TextColor3 = (fpsCol == COL_GREEN and pingCol == COL_GREEN) and Color3.new(1, 1, 1)
-            or ((fpsCol == COL_RED or pingCol == COL_RED) and Color3.fromRGB(255, 120, 120) or Color3.fromRGB(255, 220, 120))
+        local bad = (render3d and fps < 30) or (ping and ping > 200)
+        local mid = (render3d and fps < 50) or (ping and ping > 100)
+        hud.TextColor3 = bad and COL_BAD or (mid and COL_YELLOW or Color3.new(1, 1, 1))
     end))
 end
 
