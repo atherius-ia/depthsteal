@@ -3184,6 +3184,53 @@ do
     end
 end
 
+-- ===== HUD FPS & Ping =====
+do
+    local Stats = game:GetService("Stats")
+
+    local hud = Instance.new("TextLabel")
+    hud.Name = "FpsPingHUD"
+    hud.Size = UDim2.new(0, 120, 0, 40)
+    hud.Position = UDim2.new(1, -130, 0, 10)
+    hud.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+    hud.BackgroundTransparency = 0.25
+    hud.BorderSizePixel = 0
+    hud.Font = Enum.Font.GothamBold
+    hud.TextSize = 12
+    hud.TextColor3 = Color3.new(1, 1, 1)
+    hud.Text = "FPS: --\nPing: -- ms"
+    hud.Parent = gui
+    round(hud, 8)
+
+    local function getPing()
+        local ms
+        pcall(function()
+            ms = Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+        end)
+        if not ms then
+            pcall(function() ms = lp:GetNetworkPing() * 1000 end)
+        end
+        return ms
+    end
+
+    local frames, last = 0, os.clock()
+    table.insert(conns, RunService.RenderStepped:Connect(function()
+        frames += 1
+        local now = os.clock()
+        if now - last < 0.5 then return end
+        local fps = frames / (now - last)
+        frames, last = 0, now
+
+        local ping = getPing()
+        local fpsCol = fps >= 50 and COL_GREEN or (fps >= 30 and Color3.fromRGB(220, 170, 40) or COL_RED)
+        local pingCol = (not ping and COL_GREY) or (ping <= 100 and COL_GREEN) or (ping <= 200 and Color3.fromRGB(220, 170, 40)) or COL_RED
+
+        hud.Text = string.format("FPS: %d\nPing: %s", math.floor(fps + 0.5), ping and (math.floor(ping + 0.5) .. " ms") or "--")
+        hud.TextColor3 = (fpsCol == COL_GREEN and pingCol == COL_GREEN) and Color3.new(1, 1, 1)
+            or ((fpsCol == COL_RED or pingCol == COL_RED) and Color3.fromRGB(255, 120, 120) or Color3.fromRGB(255, 220, 120))
+    end))
+end
+
 -- ===== Minimize / close =====
 local minimized = false
 minBtn.Activated:Connect(function()
