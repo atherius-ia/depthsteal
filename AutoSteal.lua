@@ -3202,6 +3202,33 @@ do
     hud.Parent = gui
     round(hud, 8)
 
+    -- Tombol toggle 3D rendering (hemat GPU/baterai untuk AFK lama)
+    local render3d = true
+    local rBtn = Instance.new("TextButton")
+    rBtn.Name = "Toggle3DRender"
+    rBtn.Size = UDim2.new(0, 120, 0, 28)
+    rBtn.Position = UDim2.new(1, -130, 0, 56)
+    rBtn.BackgroundColor3 = COL_GREEN
+    rBtn.Text = "3D: ON"
+    rBtn.TextColor3 = Color3.new(1, 1, 1)
+    rBtn.Font = Enum.Font.GothamBold
+    rBtn.TextSize = 12
+    rBtn.Parent = gui
+    round(rBtn, 8)
+
+    local function set3d(on)
+        render3d = on
+        pcall(function() RunService:Set3dRenderingEnabled(on) end)
+        rBtn.Text = on and "3D: ON" or "3D: OFF"
+        rBtn.BackgroundColor3 = on and COL_GREEN or COL_RED
+    end
+    rBtn.Activated:Connect(function() set3d(not render3d) end)
+
+    -- Pastikan 3D menyala lagi saat script ditutup / dijalankan ulang
+    table.insert(conns, { Disconnect = function()
+        pcall(function() RunService:Set3dRenderingEnabled(true) end)
+    end })
+
     local function getPing()
         local ms
         pcall(function()
@@ -3225,7 +3252,7 @@ do
         local fpsCol = fps >= 50 and COL_GREEN or (fps >= 30 and Color3.fromRGB(220, 170, 40) or COL_RED)
         local pingCol = (not ping and COL_GREY) or (ping <= 100 and COL_GREEN) or (ping <= 200 and Color3.fromRGB(220, 170, 40)) or COL_RED
 
-        hud.Text = string.format("FPS: %d\nPing: %s", math.floor(fps + 0.5), ping and (math.floor(ping + 0.5) .. " ms") or "--")
+        hud.Text = string.format("FPS: %s\nPing: %s", render3d and tostring(math.floor(fps + 0.5)) or "3D off", ping and (math.floor(ping + 0.5) .. " ms") or "--")
         hud.TextColor3 = (fpsCol == COL_GREEN and pingCol == COL_GREEN) and Color3.new(1, 1, 1)
             or ((fpsCol == COL_RED or pingCol == COL_RED) and Color3.fromRGB(255, 120, 120) or Color3.fromRGB(255, 220, 120))
     end))
