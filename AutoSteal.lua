@@ -41,7 +41,7 @@ local skipGuardOn, skipCatchOn, logOn = false, false, false
 local cineCount = 0
 local nf = { on = false }
 local tr = {}
-local bs = { on = false, mode = 1 }
+local bs = { on = false, mode = 1, fleeOn = true, fleeGoMode = 1, fleeing = false }
 local bossBusy = false
 local setBoss, setClickMode
 local startClock = os.clock()
@@ -437,6 +437,8 @@ local btnFront = mkBtn(mkRow(32), "Set Depan", COL_BLUE)
 btnFront.Size = UDim2.new(1, 0, 1, 0)
 
 local speedBox = mkField("Speed (studs/dtk)", "60")
+bs.goSpeedBox = mkField("Speed ke Depan + zona steal (maks 20000)", "500")
+bs.retSpeedBox = mkField("Speed balik setelah steal (maks 20000)", "500")
 local yOffsetBox = mkField("Offset Y (studs)", "0")
 local syncWaitBox = mkField("Tunggu di depan sblm steal (dtk)", "2")
 local afterStealBox = mkField("Jeda cadangan (dtk, bila GUI kosong)", "3")
@@ -466,6 +468,20 @@ keepYBtn.Size = UDim2.new(1, 0, 1, 0)
 
 local syncBtn = mkBtn(mkRow(32), "Sinkron tinggi di Depan: ON", COL_GREEN)
 syncBtn.Size = UDim2.new(1, 0, 1, 0)
+
+mkHeader("BALIK PAKAI BAWAAN GAME (GO + ROW!)")
+bs.fleeBtn = mkBtn(mkRow(32), "Balik pakai GO+ROW! game: ON", COL_GREEN)
+bs.fleeBtn.Size = UDim2.new(1, 0, 1, 0)
+bs.fleeGoBtn = mkBtn(mkRow(32), "GO saat balik: SEKALI (diingat)", COL_GREY)
+bs.fleeGoBtn.Size = UDim2.new(1, 0, 1, 0)
+bs.fleeGoBox = mkField("Teks tombol GO", "go")
+bs.fleeRowBox = mkField("Teks tombol ROW!", "row")
+bs.fleeKeyBox = mkField("Teks banner kejar", "flee")
+bs.fleeIntBox = mkField("Interval tap ROW! (dtk)", "0.15")
+bs.fleeArriveBox = mkField("Jarak tiba dari Depan (studs)", "60")
+bs.fleeMaxBox = mkField("Batas waktu balik (dtk)", "45")
+bs.testRow = mkBtn(mkRow(32), "Tes ROW!", COL_GREY)
+bs.testRow.Size = UDim2.new(1, 0, 1, 0)
 
 -- ===== Tab SKIP CINEMATIC =====
 newTab("Skip")
@@ -1007,7 +1023,7 @@ trainBtn.Activated:Connect(function() setTrain(not trainOn) end)
 
 -- ===== Stabilizer =====
 table.insert(conns, RunService.Stepped:Connect(function()
-    if stabOn and running then
+    if stabOn and running and not bs.fleeing then
         local h = getHRP()
         if h then
             h.AssemblyLinearVelocity = Vector3.zero
@@ -1824,6 +1840,154 @@ do
         return did
     end
 
+    do
+    -- ===== Balik pakai GO + ROW! bawaan game =====
+    -- Kapal digerakkan oleh game sendiri (bukan CFrame script), jadi booster ROW! ikut bekerja.
+    -- Hasil: true = tiba/aman, false = habis waktu, nil = tombol ROW! tidak ditemukan.
+    local HOLD_ID = 5001
+    local function holdGo(g, down)
+        if not VIMtouch or not g or not g.Parent then return end
+        local okp, x, y = pcall(guiCenter, g)
+        if not okp then return end
+        pcall(function() VIMtouch:SendTouchEvent(HOLD_ID, down and 0 or 2, x, y) end)
+    end
+
+    local function fleeBody(alivePathFn)
+        local arrive = clamp(tonumber(bs.fleeArriveBox.Text) or 60, 5, 500)
+        local maxT = clamp(tonumber(bs.fleeMaxBox.Text) or 45, 10, 180)
+        local interval = clamp(tonumber(bs.fleeIntBox.Text) or 0.15, 0.05, 1)
+        local t0 = os.clock()
+
+        -- Tunggu tombol ROW! muncul (maks 2,5 dtk). ROW! hanya ada saat kabur, jadi dipakai sebagai penanda.
+        local rowBtn
+        while alivePathFn() and os.clock() - t0 < 2.5 do
+            rowBtn = (findByText(bs.fleeRowBox.Text, nil, true))
+            if rowBtn then break end
+            task.wait(0.1)
+        end
+        if not rowBtn then return nil end
+
+        -- Tombol GO dicari hanya di ScreenGui yang sama dengan ROW! (bukan GO milik notifikasi boss)
+        local root = rowBtn:FindFirstAncestorWhichIsA("ScreenGui")
+        local goBtn = root and (findByText(bs.fleeGoBox.Text, root, true)) or nil
+        local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+        if hum then pcall(function() hum.PlatformStand = false end) end
+
+        local goMode, goHeld = bs.fleeGoMode or 1, false
+        local function pressGo(force)
+            if goMode == 3 then return end
+            if goMode == 1 and bs.goDone and not force then return end -- GO sudah hidup, tidak perlu ditekan lagi
+            local g = goBtn
+            if not (g and g.Parent and visibleDeep(g)) then
+                g = root and (findByText(bs.fleeGoBox.Text, root, true)) or nil
+                goBtn = g
+            end
+            if not g then return end
+            if goMode == 2 then
+                holdGo(g, true)
+                goHeld = true
+            else
+                clickGui(g)
+                bs.goDone = true
+            end
+        end
+        pressGo()
+        if logOn then logLine("[balik] mulai: ROW ditemukan, GO=" .. tostring(goBtn ~= nil)) end
+
+        local hrp0 = getHRP()
+        local lastPos = hrp0 and hrp0.Position
+        local lastGoTry, goTries = os.clock(), 1
+        local keyF = tostring(bs.fleeKeyBox.Text or "")
+        local seenFlee, lastFlee, nextBanner, nextScan = false, os.clock(), 0, 0
+        local result = false
+
+        while alivePathFn() do
+            local now = os.clock()
+            local h = getHRP()
+            if not h then break end
+            if frontPos and (h.Position - frontPos).Magnitude <= arrive then result = true break end
+            if now - t0 > maxT then break end
+
+            -- ROW!: tap berulang
+            if not (rowBtn and rowBtn.Parent and visibleDeep(rowBtn)) then
+                rowBtn = nil
+                if now >= nextScan then
+                    nextScan = now + 0.5
+                    rowBtn = (findByText(bs.fleeRowBox.Text, nil, true))
+                end
+            end
+            if rowBtn then clickGui(rowBtn) end
+
+            -- GO (mode tap): ulangi hanya kalau karakter belum bergerak
+            if goMode == 1 and goTries < 3 and now - lastGoTry > 2.5 then
+                if lastPos and (h.Position - lastPos).Magnitude < 8 then
+                    pressGo(true)
+                    goTries += 1
+                end
+                lastGoTry, lastPos = now, h.Position
+            end
+
+            -- Banner "FLEE!" hilang = kejaran selesai
+            if keyF ~= "" and now >= nextBanner then
+                nextBanner = now + 0.5
+                if findByText(keyF, nil, false) then
+                    seenFlee, lastFlee = true, now
+                elseif seenFlee and now - lastFlee > 2.5 then
+                    result = true
+                    break
+                end
+            end
+            task.wait(interval)
+        end
+
+        if goHeld then holdGo(goBtn, false) end
+        if logOn then logLine("[balik] selesai hasil=" .. tostring(result)) end
+        return result
+    end
+
+    bs.flee = function(alivePathFn)
+        bs.fleeing = true
+        local okf, res = pcall(fleeBody, alivePathFn)
+        bs.fleeing = false
+        if not okf then
+            warn(res)
+            return nil
+        end
+        return res
+    end
+
+    bs.fleeSet = function(on)
+        bs.fleeOn = on
+        bs.fleeBtn.Text = "Balik pakai GO+ROW! game: " .. (on and "ON" or "OFF")
+        bs.fleeBtn.BackgroundColor3 = on and COL_GREEN or COL_GREY
+    end
+    bs.fleeBtn.Activated:Connect(function() bs.fleeSet(not bs.fleeOn) end)
+
+    local GO_MODES = { "SEKALI (diingat)", "TAHAN", "TIDAK" }
+    bs.fleeGoSet = function(m)
+        m = tonumber(m) or 1
+        if m < 1 or m > #GO_MODES then m = 1 end
+        bs.fleeGoMode = m
+        bs.fleeGoBtn.Text = "GO saat balik: " .. GO_MODES[m]
+    end
+    bs.fleeGoBtn.Activated:Connect(function() bs.fleeGoSet(bs.fleeGoMode % #GO_MODES + 1) end)
+    bs.fleeSet(true)
+    bs.fleeGoSet(1)
+    table.insert(conns, lp.CharacterAdded:Connect(function() bs.goDone = false end))
+
+    bs.testRow.Activated:Connect(function()
+        local b = (findByText(bs.fleeRowBox.Text, nil, true))
+        if not b then
+            status.Text = "Tes ROW!: tombol tidak terlihat (hanya muncul saat kabur)"
+            return
+        end
+        flash(b)
+        clickGui(b)
+        status.Text = "Tes ROW!: ditekan (kotak merah = tombol yang ditemukan)"
+    end)
+
+    end
+
     local function walk(target, speed, stopDist, maxT)
         local t0 = os.clock()
         while alive and (bs.on or bs.walkTest) and not running do
@@ -2567,11 +2731,13 @@ local function cycle(id)
     local radius = clamp(tonumber(radiusBox.Text) or 100, 5, 2000)
     local z = zones[selected]
     if not z then return end
+    bs.fleeing = false
 
-    if not syncHeight(speed, id) then return end
+    local goSpeed = clamp(tonumber(bs.goSpeedBox.Text) or speed, 5, 20000)
+    if not syncHeight(goSpeed, id) then return end
 
     status.Text = "Menuju " .. z.name
-    if not moveTo(z.pos, speed, 1.5, id) then return end
+    if not moveTo(z.pos, goSpeed, 1.5, id) then return end
     if not pause(0.5, id) then return end
 
     local eggs = collectEggs(z, radius, speed, id)
@@ -2581,6 +2747,8 @@ local function cycle(id)
     if not alivePath(id) then return end
 
     if stolen > 0 then
+        -- stabilizer dilepas supaya kapal/ROW! tidak ditahan selama fase kabur
+        if bs.fleeOn and bs.flee then bs.fleeing = true end
         local cineKey = cineKeyBox.Text:match("%S")
         if cineKey then
             local timeout = clamp(tonumber(cineTimeoutBox.Text) or 10, 1, 60)
@@ -2605,8 +2773,18 @@ local function cycle(id)
 
     local hh = getHRP()
     if hh then baseY = hh.Position.Y end
+    if stolen > 0 and bs.fleeOn and bs.flee then
+        status.Text = "Balik pakai GO + ROW! game"
+        local fled = bs.flee(function() return alivePath(id) end)
+        if not alivePath(id) then return end
+        if fled == nil then status.Text = "ROW! tidak terlihat, balik pakai gerak script" end
+        hh = getHRP()
+        if hh then baseY = hh.Position.Y end
+    end
+    bs.fleeing = false
     status.Text = "Kembali ke depan"
-    if not moveTo(frontPos, speed, 1.5, id) then return end
+    local retSpeed = clamp(tonumber(bs.retSpeedBox.Text) or speed, 5, 20000)
+    if not moveTo(frontPos, retSpeed, 1.5, id) then return end
 
     status.Text = "Tunggu " .. waitFront .. " dtk"
     pause(waitFront, id)
@@ -2729,6 +2907,7 @@ local function setRunning(on)
     toggle.BackgroundColor3 = on and COL_GREEN or COL_RED
     if not on then
         status.Text = "Berhenti"
+        bs.fleeing = false
         setStand(false)
     end
 end
@@ -2771,6 +2950,14 @@ local fieldMap = {
     bossTp = bs.tpBox,
     bossHome = bs.homeNameBox,
     bossClickY = bs.clickYBox,
+    retSpeed = bs.retSpeedBox,
+    goSpeed = bs.goSpeedBox,
+    fleeGo = bs.fleeGoBox,
+    fleeRow = bs.fleeRowBox,
+    fleeKey = bs.fleeKeyBox,
+    fleeInt = bs.fleeIntBox,
+    fleeArrive = bs.fleeArriveBox,
+    fleeMax = bs.fleeMaxBox,
     dropSizes = bs.dropSizeBox,
     dropText = bs.dropTextBox,
     dropSure = bs.dropSureBox,
@@ -2811,7 +2998,9 @@ local function collectConfig()
     c.toggles.inv = bs.invOn == true
     c.toggles.bossRespawn = bs.bossRespawnOn == true
     c.toggles.invTrain = bs.invTrainOn == true
+    c.toggles.flee = bs.fleeOn == true
     c.clickMode = bs.mode
+    c.fleeGoMode = bs.fleeGoMode
     if frontPos then c.front = v3t(frontPos) end
     if tr.pos then c.trainPos = v3t(tr.pos) end
     if tr.rel then c.trainRel = v3t(tr.rel) end
@@ -2849,8 +3038,10 @@ local function applyConfig(c)
         if c.toggles.inv ~= nil and bs.invSet then bs.invSet(c.toggles.inv == true) end
         if c.toggles.bossRespawn ~= nil and bs.bossRespawnSet then bs.bossRespawnSet(c.toggles.bossRespawn == true) end
         if c.toggles.invTrain ~= nil and bs.invTrainSet then bs.invTrainSet(c.toggles.invTrain == true) end
+        if c.toggles.flee ~= nil and bs.fleeSet then bs.fleeSet(c.toggles.flee == true) end
     end
     if type(c.clickMode) == "number" then setClickMode(c.clickMode) end
+    if type(c.fleeGoMode) == "number" and bs.fleeGoSet then bs.fleeGoSet(c.fleeGoMode) end
     frontPos = t3v(c.front)
     tr.pos = t3v(c.trainPos)
     tr.rel = t3v(c.trainRel)
